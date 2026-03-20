@@ -1,0 +1,73 @@
+[project]
+name = "book2skills-backend"
+version = "0.1.0"
+description = "book2skills backend — PDF/EPUB to Agent Skills pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    # Web framework
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.0",
+    "alembic>=1.13.0",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",
+    # Task queue
+    "celery>=5.4.0",
+    "redis>=5.0.0",
+    # AI / RAG
+    "langchain>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "langchain-qdrant>=0.1.0",
+    "openai>=1.35.0",
+    "qdrant-client>=1.9.0",
+    # Document parsing
+    "PyMuPDF>=1.24.0",
+    "ebooklib>=0.18.0",
+    "beautifulsoup4>=4.12.0",
+    # Data validation
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    # Utilities
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0.0",
+    "aiofiles>=23.2.1",
+    "httpx>=0.27.0",
+    "tenacity>=8.3.0",
+    "langchain-text-splitters>=1.1.1",
+    "scikit-learn>=1.8.0",
+    "rank-bm25>=0.2.2",
+    "umap-learn>=0.5.11",
+    "hdbscan>=0.8.41",
+    "numpy>=2.4.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

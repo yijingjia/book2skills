@@ -1,0 +1,71 @@
+services:
+  backend:
+    build: ./backend
+    container_name: book2skills-backend
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - book_storage:/app/storage
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    command: bash -c "echo 'Running migrations...' && alembic upgrade head && echo 'Migrations completed!' && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level info"
+
+  worker:
+    build: ./backend
+    container_name: book2skills-worker
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - book_storage:/app/storage
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+  frontend:
+    build: ./frontend
+    container_name: book2skills-frontend
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: book2skills-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: book2skills-redis
+    ports:
+      - "6379:6379"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: book2skills-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  book_storage:

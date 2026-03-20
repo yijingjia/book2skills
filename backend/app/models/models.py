@@ -1,0 +1,96 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+
+class Book(Base):
+    __tablename__ = "books"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(500))
+    author: Mapped[str | None] = mapped_column(String(500))
+    file_path: Mapped[str] = mapped_column(String(1000))
+    file_type: Mapped[str] = mapped_column(String(10))  # 'pdf' | 'epub'
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # 'pending' | 'processing' | 'ready' | 'error'
+    file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
+    skill_packages: Mapped[list["SkillPackage"]] = relationship("SkillPackage", back_populates="book", cascade="all, delete-orphan")
+
+
+class Chapter(Base):
+    __tablename__ = "chapters"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"))
+    title: Mapped[str] = mapped_column(String(500))
+    chapter_num: Mapped[int] = mapped_column(Integer)
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+    book: Mapped["Book"] = relationship("Book", back_populates="chapters")
+
+
+class SkillPackage(Base):
+    __tablename__ = "skill_packages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"))
+    user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    skill_md: Mapped[str | None] = mapped_column(Text)
+    scripts: Mapped[dict | None] = mapped_column(JSONB)
+    templates: Mapped[dict | None] = mapped_column(JSONB)
+    zip_path: Mapped[str | None] = mapped_column(String(1000))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(50), default="draft")
+    # 'draft' | 'generating' | 'ready' | 'error'
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    book: Mapped["Book"] = relationship("Book", back_populates="skill_packages")
+    conversations: Mapped[list["Conversation"]] = relationship("Conversation", back_populates="skill_package", cascade="all, delete-orphan")
+    skills: Mapped[list["Skill"]] = relationship("Skill", back_populates="skill_package", cascade="all, delete-orphan")
+
+
+class Skill(Base):
+    __tablename__ = "skills"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"))
+    skill_package_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("skill_packages.id"), nullable=True)
+
+    name: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    when_to_use: Mapped[dict | list | None] = mapped_column(JSONB)
+    workflow: Mapped[dict | list | None] = mapped_column(JSONB)
+    templates: Mapped[dict | list | None] = mapped_column(JSONB)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    book: Mapped["Book"] = relationship("Book")
+    skill_package: Mapped["SkillPackage"] = relationship("SkillPackage", back_populates="skills")
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    skill_package_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("skill_packages.id"))
+    role: Mapped[str] = mapped_column(String(20))  # 'user' | 'assistant'
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    skill_package: Mapped["SkillPackage"] = relationship("SkillPackage", back_populates="conversations")
