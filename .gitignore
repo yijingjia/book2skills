@@ -65,6 +65,7 @@ data/
 # skills
 .agent
 .agents
+.cursor
 skills-lock.json
 
 # docs
