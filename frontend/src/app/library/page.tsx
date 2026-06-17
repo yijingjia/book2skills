@@ -286,13 +286,16 @@ function BookRow({
         )}
 
         {book.status === 'ready' && !book.skill_id && (
-          <Link
-            href={`/?book_id=${book.book_id}`}
+          <button
+            onClick={() => onRegenerate(book.book_id)}
+            disabled={generating}
             className="btn-secondary"
-            style={{ textDecoration: 'none', fontSize: '12px', padding: '6px 14px' }}
+            style={{ fontSize: '12px', padding: '6px 14px' }}
           >
-            {t('library.generateSkill')}
-          </Link>
+            {generating ? (
+              <><Loader2 size={12} style={{ animation: 'spin 1.4s linear infinite' }} /> {t('library.skill.generating')}</>
+            ) : t('library.generateSkill')}
+          </button>
         )}
 
         {book.skill_id && isGenerating && (
