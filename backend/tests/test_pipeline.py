@@ -16,13 +16,200 @@ class TestDocumentParser:
         assert parser._is_noise("第一章 决策框架") is False
         assert parser._is_noise("参考文献") is True
 
-    def test_clean_page_text_removes_short_lines(self):
+    def test_split_markdown_by_chapter_markers(self):
+        """Chapter boundaries are `第N章` lines, NOT heading levels.
+        第3章 has multiple ## sections — they must NOT be split into separate chapters."""
         from app.pipeline.parser import DocumentParser
+
         parser = DocumentParser()
-        text = "正文内容这是一段很长的文字内容应该保留\n3\n版权信息"
-        result = parser._clean_page_text(text)
-        assert "正文内容" in result
-        assert "3\n" not in result
+        # This fixture mirrors real pymupdf4llm output structure
+        markdown = "\n\n".join([
+            "## PREFACE 再版序",
+            "再版序正文内容。" * 30,
+            "第1章",
+            "## 是非对错的底层逻辑",
+            "第一章正文。" * 30,
+            "### 一个人心中应该有三种对错观",
+            "小节内容。" * 20,
+            "### 法学家的对错观",
+            "法学家内容。" * 20,
+            "第2章",
+            "## 思考问题的底层逻辑",
+            "第二章正文。" * 30,
+            "### 事实、观点、立场和信仰",
+            "事实观点内容。" * 20,
+            "第3章",
+            "## 个体进化的底层逻辑",
+            "第三章正文。" * 30,
+            "## 人生商业模式=能力×效率×杠杆",
+            "商业模式内容。" * 30,
+            "### 能力",
+            "能力内容。" * 20,
+            "## 把工作当成玩",
+            "工作当成玩内容。" * 30,
+            "## 如何做好时间管理",
+            "时间管理内容。" * 30,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        # Should have exactly 3 numbered chapters (preface handled separately)
+        numbered = [ch for ch in chapters if ch.title.startswith("是非") or ch.title.startswith("思考") or ch.title.startswith("个体")]
+        assert len(numbered) == 3, f"Expected 3 chapters, got {len(numbered)}: {[c.title for c in numbered]}"
+
+        # Chapter 1
+        ch1 = next(ch for ch in chapters if "是非" in ch.title)
+        assert ch1.chapter_num >= 1
+        assert "第一章正文" in ch1.text
+        assert "法学家内容" in ch1.text
+
+        # Chapter 3: ALL ## sections must be in the same chapter
+        ch3 = next(ch for ch in chapters if "个体" in ch.title)
+        assert "商业模式内容" in ch3.text, "## 人生商业模式 must stay in chapter 3"
+        assert "工作当成玩内容" in ch3.text, "## 把工作当成玩 must stay in chapter 3"
+        assert "时间管理内容" in ch3.text, "## 如何做好时间管理 must stay in chapter 3"
+
+    def test_split_markdown_detects_preface_and_afterword(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "## PREFACE 再版序",
+            "再版序正文。" * 30,
+            "# 初版序 PREFACE",
+            "初版序正文。" * 30,
+            "第1章",
+            "## 是非对错的底层逻辑",
+            "正文。" * 50,
+            "后记",
+            "# 文明，是更高级的生命",
+            "后记正文。" * 30,
+        ])
+        chapters = parser._split_markdown_into_chapters(markdown)
+        titles = [ch.title for ch in chapters]
+
+        assert any("再版序" in t or "PREFACE" in t for t in titles), f"Preface not found in {titles}"
+        assert any("是非" in t for t in titles), f"Chapter 1 not found in {titles}"
+        assert any("后记" in t or "文明" in t for t in titles), f"Afterword not found in {titles}"
+
+    def test_split_markdown_returns_empty_for_no_markers(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "这是一段没有任何章节标记的纯文本。" * 50
+        chapters = parser._split_markdown_into_chapters(markdown)
+        assert chapters == []
+
+    def test_split_markdown_chinese_numeral_chapter_markers(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "第一章",
+            "## 开篇",
+            "第一章内容。" * 30,
+            "第二章",
+            "## 发展",
+            "第二章内容。" * 30,
+        ])
+        chapters = parser._split_markdown_into_chapters(markdown)
+        assert len(chapters) == 2
+        assert "开篇" in chapters[0].title
+        assert "发展" in chapters[1].title
+
+    def test_split_markdown_supports_heading_chapter_markers_with_plain_title(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "# 初版序 PREFACE",
+            "初版序正文。" * 30,
+            "## 第1章",
+            "是非对错的底层逻辑",
+            "第一章正文。" * 30,
+            "## 一个人心中，应该有三种对错观",
+            "小节内容。" * 20,
+            "## 第2章",
+            "## 思考问题的底层逻辑",
+            "第二章正文。" * 30,
+        ])
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        titles = [ch.title for ch in chapters]
+        assert titles == ["初版序 PREFACE", "是非对错的底层逻辑", "思考问题的底层逻辑"]
+        assert "第一章正文" in chapters[1].text
+        assert "小节内容" in chapters[1].text
+        assert "第二章正文" in chapters[2].text
+
+    @patch("app.pipeline.parser.pymupdf4llm")
+    @patch("app.pipeline.parser.fitz")
+    def test_parse_pdf_uses_pymupdf4llm(self, mock_fitz, mock_pymupdf4llm):
+        from app.pipeline.parser import DocumentParser
+
+        mock_doc = MagicMock()
+        mock_doc.metadata = {"title": "测试书籍", "author": "作者"}
+        mock_doc.page_count = 100
+        mock_fitz.open.return_value = mock_doc
+
+        mock_pymupdf4llm.to_markdown.side_effect = [
+            # First call: full markdown
+            "\n\n".join([
+                "第1章",
+                "## 决策框架",
+                "第一章正文内容。" * 30,
+                "### 小节一",
+                "小节一内容。" * 20,
+                "第2章",
+                "## 思考方法",
+                "第二章正文内容。" * 30,
+            ]),
+            # Second call: page_chunks mode (list of dicts)
+            [
+                {"metadata": {"page": 7}, "text": "第1章\n## 决策框架"},
+                {"metadata": {"page": 8}, "text": "### 小节一"},
+                {"metadata": {"page": 23}, "text": "第2章\n## 思考方法"},
+            ],
+        ]
+
+        parser = DocumentParser()
+        result = parser._parse_pdf("/fake/path.pdf")
+
+        assert result.title == "测试书籍"
+        assert result.author == "作者"
+        assert result.page_count == 100
+        assert result.file_type == "pdf"
+        assert len(result.chapters) == 2
+        assert "决策框架" in result.chapters[0].title
+        assert "第一章正文内容" in result.chapters[0].text
+        assert result.chapters[0].page_start == 7
+        assert result.chapters[0].page_end == 22   # 23 - 1
+        assert "思考方法" in result.chapters[1].title
+        assert result.chapters[1].page_start == 23
+        assert result.chapters[1].page_end == 100  # last chapter → page_count
+
+    @patch("app.pipeline.parser.pymupdf4llm")
+    def test_build_page_index_skips_chunks_without_page_metadata(self, mock_pymupdf4llm):
+        from app.pipeline.parser import DocumentParser, RawChapter
+
+        mock_pymupdf4llm.to_markdown.return_value = [
+            {"metadata": {"page": None}, "text": "第1章\n## 决策框架"},
+            {"metadata": {}, "text": "第2章\n## 思考方法"},
+            {"metadata": None, "text": "第2章\n## 思考方法"},
+            {"metadata": {"page_number": 7}, "text": "第1章\n## 决策框架"},
+            {"metadata": {"page": 23}, "text": "第2章\n## 思考方法"},
+        ]
+        chapters = [
+            RawChapter(chapter_num=1, title="决策框架", text="第一章正文"),
+            RawChapter(chapter_num=2, title="思考方法", text="第二章正文"),
+        ]
+
+        parser = DocumentParser()
+        parser._build_page_index("/fake/path.pdf", chapters, page_count=100)
+
+        assert chapters[0].page_start == 7
+        assert chapters[0].page_end == 22
+        assert chapters[1].page_start == 23
+        assert chapters[1].page_end == 100
 
 
 # ─── Chunker 测试 ────────────────────────────────────────────────────────────
