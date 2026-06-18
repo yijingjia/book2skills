@@ -93,6 +93,29 @@ class KnowledgeUnit(BaseModel):
 
         return data
 
+    @field_validator("principle", "method", "example", mode="before")
+    @classmethod
+    def ensure_optional_string(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
+        if isinstance(v, dict):
+            parts = [
+                str(item).strip()
+                for item in v.values()
+                if item is not None and str(item).strip()
+            ]
+            return "\n".join(parts) or None
+        if isinstance(v, (list, tuple, set)):
+            parts = [
+                str(item).strip()
+                for item in v
+                if item is not None and str(item).strip()
+            ]
+            return "\n".join(parts) or None
+        return str(v)
+
     @field_validator("step_by_step", "when_to_use", mode="before")
     @classmethod
     def ensure_list(cls, v: Any) -> list[str]:

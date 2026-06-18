@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.core.llm import get_generation_model, get_llm_client
+from app.core.llm import close_llm_client, get_generation_model, get_llm_client
 from app.core.retry import llm_retry
 from app.pipeline.retriever import RetrievedChunk
 from app.schemas.schemas import KnowledgeUnit
@@ -21,6 +21,9 @@ class KnowledgeExtractor:
         self.client = get_llm_client()
         with open(PROMPT_PATH, encoding="utf-8") as f:
             self.prompt_template = f.read()
+
+    async def aclose(self) -> None:
+        await close_llm_client(self.client)
 
     async def extract_from_chunks(
         self,

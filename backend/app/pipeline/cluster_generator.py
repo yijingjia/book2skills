@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from app.core.llm import get_chat_model, get_llm_client
+from app.core.llm import close_llm_client, get_chat_model, get_llm_client
 from app.core.retry import llm_retry
 from app.pipeline.ku_processor import KUProcessor
 from app.schemas.schemas import KnowledgeUnit
@@ -17,6 +17,10 @@ class ClusterGenerator:
         self.client = get_llm_client()
         self.model = get_chat_model()
         self.ku_processor = KUProcessor()
+
+    async def aclose(self) -> None:
+        await close_llm_client(self.client)
+        await self.ku_processor.aclose()
 
     async def cluster_knowledge_units(
         self, kus: list[KnowledgeUnit]

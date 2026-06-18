@@ -6,7 +6,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from app.core.config import settings
-from app.core.llm import get_embedding_client
+from app.core.llm import close_embedding_client, get_embedding_client
 from app.pipeline.chunker import TextChunk
 
 
@@ -20,6 +20,9 @@ class EmbeddingService:
             url=settings.QDRANT_URL,
             api_key=settings.QDRANT_API_KEY or None,
         )
+
+    async def aclose(self) -> None:
+        await close_embedding_client(self.embeddings)
 
     def ensure_collection(self, book_id: str) -> None:
         """确保 Qdrant collection 存在"""

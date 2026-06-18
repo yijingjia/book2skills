@@ -6,7 +6,7 @@ import numpy as np
 import umap
 from sklearn.metrics.pairwise import cosine_similarity
 
-from app.core.llm import get_embedding_client
+from app.core.llm import close_embedding_client, get_embedding_client
 from app.schemas.schemas import KnowledgeUnit
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,9 @@ class KUProcessor:
 
     def __init__(self):
         self.embedder = get_embedding_client()
+
+    async def aclose(self) -> None:
+        await close_embedding_client(self.embedder)
 
     async def _embed_one(self, text: str, semaphore: asyncio.Semaphore) -> list:
         """单条原文 Embedding，带并发信号量控制"""

@@ -2,6 +2,8 @@
 核心 Pipeline 单元测试
 运行：pytest tests/ -v
 """
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -330,6 +332,192 @@ class TestDocumentParser:
 
         assert chapters == []
         assert "No chapter boundaries detected" in caplog.text
+
+
+# ─── KnowledgeUnit 规范化测试 ────────────────────────────────────────────────
+
+def test_knowledge_unit_normalizes_scalar_text_fields():
+    from app.schemas.schemas import KnowledgeUnit
+
+    ku = KnowledgeUnit(
+        source_chunk_id="book_ch1_0",
+        source_chapter_num=1,
+        principle=["原则一", "原则二"],
+        method={"name": "方法名", "detail": "方法说明"},
+        example=["例子一", "例子二"],
+    )
+
+    assert ku.principle == "原则一\n原则二"
+    assert ku.method == "方法名\n方法说明"
+    assert ku.example == "例子一\n例子二"
+
+
+@pytest.mark.asyncio
+async def test_extractor_preserves_ku_with_list_example():
+    from app.pipeline.extractor import KnowledgeExtractor
+    from app.pipeline.retriever import RetrievedChunk
+
+    payload = [
+        {
+            "name": "系统思考",
+            "definition": "识别要素之间关系的能力",
+            "type": "mental_model",
+            "principle": ["看见结构", "关注反馈"],
+            "method": {"step": "画出关键变量"},
+            "example": ["例子 A", "例子 B"],
+            "when_to_use": "分析复杂问题",
+        }
+    ]
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False))
+                    )
+                ]
+            )
+
+    class FakeClient:
+        chat = SimpleNamespace(completions=FakeCompletions())
+
+    extractor = KnowledgeExtractor()
+    extractor.client = FakeClient()
+    chunks = [
+        RetrievedChunk(
+            text="复杂系统需要先识别变量关系，再观察反馈。",
+            book_id="book-1",
+            chapter_num=3,
+            chapter_title="系统思考",
+            chunk_index=7,
+            page_start=42,
+            score=0.9,
+        )
+    ]
+
+    kus = await extractor._call_batch_llm("prompt", chunks)
+
+    assert len(kus) == 1
+    assert kus[0].principle == "看见结构\n关注反馈"
+    assert kus[0].method == "画出关键变量"
+    assert kus[0].example == "例子 A\n例子 B"
+    assert kus[0].source_chunk_id == "book-1_ch3_7"
+    assert kus[0].source_chapter_num == 3
+
+
+@pytest.mark.asyncio
+async def test_close_llm_client_awaits_close_method():
+    from app.core.llm import close_llm_client
+
+    class Client:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    client = Client()
+    await close_llm_client(client)
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_close_llm_client_awaits_aclose_method():
+    from app.core.llm import close_llm_client
+
+    class Client:
+        def __init__(self):
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    client = Client()
+    await close_llm_client(client)
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_close_llm_client_ignores_missing_client():
+    from app.core.llm import close_llm_client
+
+    await close_llm_client(None)
+    await close_llm_client(object())
+
+
+@pytest.mark.asyncio
+async def test_close_embedding_client_closes_inner_client():
+    from app.core.llm import close_embedding_client
+
+    class InnerClient:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class AsyncEmbeddingsResource:
+        def __init__(self, inner):
+            self._client = inner
+
+    inner = InnerClient()
+    embedder = SimpleNamespace(async_client=AsyncEmbeddingsResource(inner))
+
+    await close_embedding_client(embedder)
+
+    assert inner.closed is True
+
+
+@pytest.mark.asyncio
+async def test_close_embedding_client_ignores_none_and_missing():
+    from app.core.llm import close_embedding_client
+
+    await close_embedding_client(None)
+    await close_embedding_client(object())
+    await close_embedding_client(SimpleNamespace(async_client=None))
+    await close_embedding_client(SimpleNamespace(async_client=object()))
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_closes_embedding_client():
+    from app.pipeline.embedder import EmbeddingService
+
+    service = EmbeddingService.__new__(EmbeddingService)
+    service.embeddings = AsyncMock()
+
+    with patch("app.pipeline.embedder.close_embedding_client", new=AsyncMock()) as close:
+        await service.aclose()
+
+    close.assert_awaited_once_with(service.embeddings)
+
+
+@pytest.mark.asyncio
+async def test_ku_processor_closes_embedding_client():
+    from app.pipeline.ku_processor import KUProcessor
+
+    processor = KUProcessor.__new__(KUProcessor)
+    processor.embedder = AsyncMock()
+
+    with patch("app.pipeline.ku_processor.close_embedding_client", new=AsyncMock()) as close:
+        await processor.aclose()
+
+    close.assert_awaited_once_with(processor.embedder)
+
+
+@pytest.mark.asyncio
+async def test_cluster_generator_closes_ku_processor_embedder():
+    from app.pipeline.cluster_generator import ClusterGenerator
+
+    generator = ClusterGenerator.__new__(ClusterGenerator)
+    generator.client = AsyncMock()
+    generator.ku_processor = AsyncMock()
+
+    with patch("app.pipeline.cluster_generator.close_llm_client", new=AsyncMock()) as close_llm:
+        await generator.aclose()
+
+    close_llm.assert_awaited_once_with(generator.client)
+    generator.ku_processor.aclose.assert_awaited_once()
 
 
 # ─── Chunker 测试 ────────────────────────────────────────────────────────────

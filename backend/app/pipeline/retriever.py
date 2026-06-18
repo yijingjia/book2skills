@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from app.core.config import settings
-from app.core.llm import get_embedding_client
+from app.core.llm import close_embedding_client, get_embedding_client
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,9 @@ class RAGRetriever:
             url=settings.QDRANT_URL,
             api_key=settings.QDRANT_API_KEY or None,
         )
+
+    async def aclose(self) -> None:
+        await close_embedding_client(self.embeddings)
 
     async def retrieve(
         self,

@@ -1,3 +1,5 @@
+import inspect
+
 from langchain_openai import OpenAIEmbeddings
 from openai import AsyncOpenAI
 
@@ -17,6 +19,35 @@ def get_llm_client() -> AsyncOpenAI:
             base_url=settings.GLM_BASE_URL
         )
     return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+async def close_llm_client(client: object | None) -> None:
+    """Close an async LLM client if it exposes a supported close method."""
+    if client is None:
+        return
+
+    close = getattr(client, "close", None) or getattr(client, "aclose", None)
+    if close is None:
+        return
+
+    result = close()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def close_embedding_client(embedder: object | None) -> None:
+    """Close the async HTTP client owned by an OpenAIEmbeddings instance.
+
+    OpenAIEmbeddings.async_client is AsyncEmbeddings (a resource proxy), not
+    AsyncOpenAI. The closable object is one level deeper: async_client._client.
+    """
+    if embedder is None:
+        return
+    async_embeddings = getattr(embedder, "async_client", None)
+    if async_embeddings is None:
+        return
+    inner = getattr(async_embeddings, "_client", None)
+    await close_llm_client(inner)
+
 
 def get_embedding_client() -> OpenAIEmbeddings:
     """获取配置好的 Embedding 客户端"""

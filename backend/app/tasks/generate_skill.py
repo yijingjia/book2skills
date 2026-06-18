@@ -81,11 +81,12 @@ async def _generate_skill_async(
     engine = create_async_engine(settings.DATABASE_URL)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    extractor = KnowledgeExtractor()
-    cluster_gen = ClusterGenerator()
-    skill_gen = SkillGenerator()
-    router_gen = RouterGenerator()
-    retriever = RAGRetriever()
+    extractor = None
+    cluster_gen = None
+    skill_gen = None
+    router_gen = None
+    retriever = None
+    embedder = None
 
     async with async_session() as db:
         kus = None
@@ -94,8 +95,13 @@ async def _generate_skill_async(
             skill = await db.get(SkillPackage, uuid.UUID(skill_package_id))
             if not skill:
                 logger.error(f"SkillPackage {skill_package_id} not found in task")
-                await engine.dispose()
                 return
+
+            extractor = KnowledgeExtractor()
+            cluster_gen = ClusterGenerator()
+            skill_gen = SkillGenerator()
+            router_gen = RouterGenerator()
+            retriever = RAGRetriever()
 
             # --- 检查是否可以复用 KUs ---
             if reuse_extracted_kus:
@@ -388,5 +394,22 @@ async def _generate_skill_async(
                     logger.error(f"Failed to save partial KUs: {inner_e}")
 
         finally:
-            await db.commit()
-            await engine.dispose()
+            for component in (extractor, cluster_gen, skill_gen, router_gen, retriever):
+                if component is None:
+                    continue
+                close = getattr(component, "aclose", None)
+                if close is not None:
+                    try:
+                        await close()
+                    except Exception as _e:
+                        logger.warning("Component cleanup error (ignored): %s", _e)
+            if embedder is not None:
+                try:
+                    from app.core.llm import close_embedding_client
+                    await close_embedding_client(embedder)
+                except Exception as _e:
+                    logger.warning("Embedding client cleanup error (ignored): %s", _e)
+            try:
+                await db.commit()
+            finally:
+                await engine.dispose()

@@ -3,6 +3,7 @@ Celery 异步任务 — 处理书籍的完整 Pipeline
 上传后在后台运行：解析 → 分块 → 嵌入 → 生成 references/
 """
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from app.pipeline.embedder import EmbeddingService
 from app.pipeline.parser import DocumentParser
 from app.pipeline.ref_generator import ReferenceGenerator
 from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3)
@@ -100,4 +103,8 @@ async def _process_book_async(book_id: str, file_path: str):
             await db.commit()
             raise
         finally:
+            try:
+                await embedder.aclose()
+            except Exception as cleanup_error:
+                logger.warning("EmbeddingService cleanup error (ignored): %s", cleanup_error)
             await engine.dispose()
