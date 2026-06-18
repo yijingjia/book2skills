@@ -44,6 +44,17 @@ class ChapterBoundary:
     title: str
 
 
+@dataclass
+class ChapterBoundaryCandidate:
+    line_index: int
+    body_start_line: int
+    kind: str  # "chapter" | "preface" | "afterword"
+    marker: str
+    chapter_number: int | None
+    title: str
+    score: int
+
+
 class DocumentParser:
     """解析 PDF / EPUB 文件，提取章节结构和正文"""
 
@@ -82,9 +93,15 @@ class DocumentParser:
         r"^(?:#{1,6}\s*)?CHAPTER\s+\d+(?:\s+\S+.*)?(?:\.{3,}|…{2,})\s*\d*\s*$",
         re.IGNORECASE,
     )
+    INLINE_CHINESE_CHAPTER_RE = re.compile(
+        r"(?:^|[\s　])(?P<marker>第\s*(?P<num>[一二三四五六七八九十百\d]+)\s*章)\s*(?P<title>.+)$"
+    )
+    SECTION_TITLE_CUTOFF_RE = re.compile(
+        r"\s+第[一二三四五六七八九十百\d]+\s*节(?:\s+|$)"
+    )
     PREFACE_PATTERNS = [
-        r"^#+\s*(PREFACE\s|再版序|初版序|序言)",
-        r"^(PREFACE\s.*|再版序|初版序)\s*$",
+        r"^#+\s*(PREFACE\s|再版序|初版序|序言|自序|前言)",
+        r"^(PREFACE\s.*|再版序.*|初版序.*|序言.*|自序.*|前言.*)\s*$",
     ]
 
     AFTERWORD_PATTERNS = [
@@ -167,17 +184,54 @@ class DocumentParser:
                 if title_patterns[ch.title].search(text) and ch.title not in title_to_page:
                     title_to_page[ch.title] = page_num
 
-        sorted_pages = sorted(title_to_page.values())
-
-        for ch in chapters:
+        for i, ch in enumerate(chapters):
             page = title_to_page.get(ch.title)
-            if page is not None:
-                ch.page_start = page
-                later = [p for p in sorted_pages if p > page]
-                ch.page_end = later[0] - 1 if later else page_count
+            if page is None:
+                continue
+            ch.page_start = page
+            if i + 1 >= len(chapters):
+                ch.page_end = page_count
+            else:
+                next_page = title_to_page.get(chapters[i + 1].title)
+                if next_page is not None:
+                    ch.page_end = next_page - 1
 
     def _clean_heading_marker(self, line: str) -> str:
         return re.sub(r"^#{1,6}\s*", "", line.strip()).strip()
+
+    def _strip_section_suffix(self, title: str) -> str:
+        section_match = self.SECTION_TITLE_CUTOFF_RE.search(title)
+        if section_match:
+            title = title[:section_match.start()]
+        return title.strip()
+
+    def _extract_inline_chapter_title(self, cleaned_line: str, marker: str) -> str:
+        after_marker = cleaned_line.split(marker, 1)[1].strip()
+        return self._strip_section_suffix(after_marker)
+
+    def _is_toc_like_boundary_line(self, stripped: str) -> bool:
+        cleaned = self._clean_heading_marker(stripped)
+        if self.TOC_LIKE_CHAPTER_RE.match(stripped):
+            return True
+        if self.ENGLISH_TOC_LIKE_CHAPTER_RE.match(stripped):
+            return True
+
+        chapter_hits = re.findall(r"第\s*[一二三四五六七八九十百\d]+\s*章", cleaned)
+        if len(chapter_hits) >= 2:
+            return True
+
+        section_hits = re.findall(r"第\s*[一二三四五六七八九十百\d]+\s*节", cleaned)
+        if len(section_hits) >= 4:
+            return True
+
+        if "参考文献" in cleaned and ("后记" in cleaned or "目录" in cleaned):
+            return True
+
+        catalogue_words = ("封面", "扉页", "版权信息", "目录")
+        if sum(1 for word in catalogue_words if word in cleaned) >= 2:
+            return True
+
+        return False
 
     def _parse_chapter_number(self, value: str) -> int | None:
         value = value.strip()
@@ -237,70 +291,221 @@ class DocumentParser:
         for pat in self.PREFACE_PATTERNS:
             if re.match(pat, stripped, re.IGNORECASE):
                 title = self._clean_heading_marker(stripped)
+                if len(title) > 80:
+                    return None
                 return ChapterBoundary(line_index, line_index + 1, "preface", title, None, title)
 
         for pat in self.AFTERWORD_PATTERNS:
             if re.match(pat, stripped, re.IGNORECASE):
                 title = self._clean_heading_marker(stripped)
+                if len(title) > 80:
+                    return None
                 return ChapterBoundary(line_index, line_index + 1, "afterword", title, None, title)
 
         return None
 
-    def _find_chapter_boundaries(self, lines: list[str]) -> list[ChapterBoundary]:
-        boundaries: list[ChapterBoundary] = []
-        last_chapter_number = 0
+    def _score_boundary_candidate(
+        self, stripped: str, title: str, body_start_line: int, lines: list[str]
+    ) -> int:
+        cleaned = self._clean_heading_marker(stripped)
+        score = 0
+        if stripped.startswith("#"):
+            score += 3
+        if re.match(r"^#{1,3}\s+", stripped):
+            score += 1
+        if title and not self._is_noise(title):
+            score += 2
+        if len(cleaned) <= 80:
+            score += 1
+        next_line = self._next_content_line(lines, body_start_line)
+        if next_line is not None and len(self._clean_heading_marker(next_line[1])) >= 20:
+            score += 1
+        if self._is_toc_like_boundary_line(stripped):
+            score -= 10
+        return score
+
+    def _find_chapter_boundary_candidates(
+        self, lines: list[str]
+    ) -> list[ChapterBoundaryCandidate]:
+        candidates: list[ChapterBoundaryCandidate] = []
 
         for i, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
                 continue
-            if self.TOC_LIKE_CHAPTER_RE.match(stripped):
-                continue
-            if self.ENGLISH_TOC_LIKE_CHAPTER_RE.match(stripped):
+            if self._is_toc_like_boundary_line(stripped):
                 continue
 
             special_boundary = self._detect_special_boundary(i, stripped)
             if special_boundary is not None:
-                boundaries.append(special_boundary)
+                score = self._score_boundary_candidate(
+                    stripped,
+                    special_boundary.title,
+                    special_boundary.body_start_line,
+                    lines,
+                )
+                if score > 0:
+                    candidates.append(ChapterBoundaryCandidate(
+                        line_index=special_boundary.line_index,
+                        body_start_line=special_boundary.body_start_line,
+                        kind=special_boundary.kind,
+                        marker=special_boundary.marker,
+                        chapter_number=special_boundary.chapter_number,
+                        title=special_boundary.title,
+                        score=score,
+                    ))
                 continue
 
             chapter_match = self.CHINESE_CHAPTER_RE.match(stripped)
             marker_prefix = "第"
+            inline_marker_text = None
             if chapter_match is None:
                 chapter_match = self.ENGLISH_CHAPTER_RE.match(stripped)
                 marker_prefix = "CHAPTER "
+            if chapter_match is None:
+                inline_match = self.INLINE_CHINESE_CHAPTER_RE.search(
+                    self._clean_heading_marker(stripped)
+                )
+                if inline_match is not None:
+                    chapter_match = inline_match
+                    marker_prefix = "第"
+                    inline_marker_text = inline_match.group("marker")
             if chapter_match is None:
                 continue
 
             chapter_number = self._parse_chapter_number(chapter_match.group("num"))
             if chapter_number is None:
                 continue
-            if chapter_number <= last_chapter_number:
-                continue
 
-            title, body_start_line = self._resolve_boundary_title(
-                lines,
-                i,
-                chapter_match.groupdict().get("title"),
-            )
+            if inline_marker_text:
+                marker = inline_marker_text
+                title = self._extract_inline_chapter_title(
+                    self._clean_heading_marker(stripped),
+                    marker,
+                )
+                body_start_line = i + 1
+            else:
+                title, body_start_line = self._resolve_boundary_title(
+                    lines,
+                    i,
+                    chapter_match.groupdict().get("title"),
+                )
+                title = self._strip_section_suffix(title)
+                marker = (
+                    f"{marker_prefix}{chapter_match.group('num')}章"
+                    if marker_prefix == "第"
+                    else f"CHAPTER {chapter_number}"
+                )
+
             if not title or self._is_noise(title):
                 continue
 
-            marker = f"{marker_prefix}{chapter_match.group('num')}章" if marker_prefix == "第" else f"CHAPTER {chapter_number}"
-            boundaries.append(
-                ChapterBoundary(
-                    line_index=i,
-                    body_start_line=body_start_line,
-                    kind="chapter",
-                    marker=marker,
-                    chapter_number=chapter_number,
-                    title=title,
-                )
-            )
-            last_chapter_number = chapter_number
+            score = self._score_boundary_candidate(stripped, title, body_start_line, lines)
+            if score <= 0:
+                continue
 
-        boundaries.sort(key=lambda b: b.line_index)
-        return boundaries
+            candidates.append(ChapterBoundaryCandidate(
+                line_index=i,
+                body_start_line=body_start_line,
+                kind="chapter",
+                marker=marker,
+                chapter_number=chapter_number,
+                title=title,
+                score=score,
+            ))
+
+        candidates.sort(key=lambda c: c.line_index)
+        return candidates
+
+    def _select_numbered_chapter_boundaries(
+        self,
+        candidates: list[ChapterBoundaryCandidate],
+    ) -> list[ChapterBoundaryCandidate]:
+        numbered = [
+            c for c in candidates
+            if c.kind == "chapter" and c.chapter_number is not None
+        ]
+        by_number: dict[int, list[ChapterBoundaryCandidate]] = {}
+        for candidate in numbered:
+            by_number.setdefault(candidate.chapter_number, []).append(candidate)
+
+        selected: list[ChapterBoundaryCandidate] = []
+        last_line_index = -1
+        expected = 1
+        for number in sorted(by_number):
+            if number > expected and selected:
+                logger.warning(
+                    "PDF chapter sequence skipped from %s to %s while selecting boundaries.",
+                    expected,
+                    number,
+                )
+            viable = [c for c in by_number[number] if c.line_index > last_line_index]
+            if not viable:
+                logger.warning(
+                    "PDF chapter %s has no candidate after previous selected boundary.",
+                    number,
+                )
+                continue
+            best = max(viable, key=lambda c: (c.score, -c.line_index))
+            selected.append(best)
+            last_line_index = best.line_index
+            expected = number + 1
+
+        return selected
+
+    def _select_chapter_boundaries(
+        self,
+        candidates: list[ChapterBoundaryCandidate],
+    ) -> list[ChapterBoundaryCandidate]:
+        numbered = self._select_numbered_chapter_boundaries(candidates)
+        if not numbered:
+            specials = [
+                c for c in candidates
+                if c.kind in {"preface", "afterword"} and c.score > 0
+            ]
+            specials.sort(key=lambda c: c.line_index)
+            return specials
+
+        first_numbered = numbered[0].line_index
+        last_numbered = numbered[-1].line_index
+
+        prefaces = [
+            c for c in candidates
+            if c.kind == "preface" and c.line_index < first_numbered and c.score > 0
+        ]
+        afterwords = [
+            c for c in candidates
+            if c.kind == "afterword"
+            and c.line_index > last_numbered
+            and c.score > 0
+            and "参考文献" not in c.title
+        ]
+
+        prefaces.sort(key=lambda c: c.line_index)
+        afterwords.sort(key=lambda c: c.line_index)
+
+        result: list[ChapterBoundaryCandidate] = []
+        result.extend(prefaces)
+        result.extend(numbered)
+        result.extend(afterwords)
+
+        result.sort(key=lambda c: c.line_index)
+        return result
+
+    def _find_chapter_boundaries(self, lines: list[str]) -> list[ChapterBoundary]:
+        candidates = self._find_chapter_boundary_candidates(lines)
+        selected = self._select_chapter_boundaries(candidates)
+        return [
+            ChapterBoundary(
+                line_index=c.line_index,
+                body_start_line=c.body_start_line,
+                kind=c.kind,
+                marker=c.marker,
+                chapter_number=c.chapter_number,
+                title=c.title,
+            )
+            for c in selected
+        ]
 
     def _split_markdown_into_chapters(self, markdown: str) -> list[RawChapter]:
         """Split pymupdf4llm Markdown into chapters using detected ChapterBoundary objects.

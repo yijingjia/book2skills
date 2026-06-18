@@ -161,12 +161,14 @@ class TestDocumentParser:
         chapters = parser._split_markdown_into_chapters(markdown)
 
         assert [ch.title for ch in chapters] == [
+            "前言",
             "认知觉醒",
             "潜意识——生命留给我们的彩蛋",
         ]
-        assert "第一章正文" in chapters[0].text
-        assert "第一章小节" in chapters[0].text
-        assert "第二章正文" in chapters[1].text
+        assert "前言正文" in chapters[0].text
+        assert "第一章正文" in chapters[1].text
+        assert "第一章小节" in chapters[1].text
+        assert "第二章正文" in chapters[2].text
 
     def test_split_markdown_supports_english_chapter_markers(self):
         from app.pipeline.parser import DocumentParser
@@ -251,6 +253,129 @@ class TestDocumentParser:
         assert "目录页重复标题" in chapters[0].text
         assert "第二章正文" in chapters[1].text
 
+    def test_special_boundaries_are_placed_around_numbered_chapters(self):
+        from app.pipeline.parser import ChapterBoundaryCandidate, DocumentParser
+
+        parser = DocumentParser()
+        candidates = [
+            ChapterBoundaryCandidate(2, 3, "afterword", "后记 共同改变，一起前行 参考文献", None, "后记 共同改变，一起前行 参考文献", 5),
+            ChapterBoundaryCandidate(10, 11, "preface", "自序 开启自我改变的原动力", None, "自序 开启自我改变的原动力", 6),
+            ChapterBoundaryCandidate(20, 21, "chapter", "第一章", 1, "大脑——一切问题的起源", 7),
+            ChapterBoundaryCandidate(40, 41, "chapter", "第二章", 2, "潜意识——生命留给我们的彩蛋", 7),
+            ChapterBoundaryCandidate(60, 61, "afterword", "后记 共同改变，一起前行", None, "后记 共同改变，一起前行", 7),
+        ]
+
+        selected = parser._select_chapter_boundaries(candidates)
+
+        assert [b.title for b in selected] == [
+            "自序 开启自我改变的原动力",
+            "大脑——一切问题的起源",
+            "潜意识——生命留给我们的彩蛋",
+            "后记 共同改变，一起前行",
+        ]
+
+    def test_select_numbered_chapter_boundaries_prefers_body_candidates(self):
+        from app.pipeline.parser import ChapterBoundaryCandidate, DocumentParser
+
+        parser = DocumentParser()
+        candidates = [
+            ChapterBoundaryCandidate(1, 2, "chapter", "第一章", 1, "目录里的第一章", -3),
+            ChapterBoundaryCandidate(10, 11, "chapter", "第一章", 1, "大脑——一切问题的起源", 7),
+            ChapterBoundaryCandidate(20, 21, "chapter", "第二章", 2, "潜意识——生命留给我们的彩蛋", 7),
+            ChapterBoundaryCandidate(30, 31, "chapter", "第二章", 2, "重复目录第二章", 1),
+            ChapterBoundaryCandidate(150, 151, "chapter", "第一章", 1, "后文再次提到第一章", 7),
+        ]
+
+        selected = parser._select_numbered_chapter_boundaries(candidates)
+
+        assert [(b.chapter_number, b.title) for b in selected] == [
+            (1, "大脑——一切问题的起源"),
+            (2, "潜意识——生命留给我们的彩蛋"),
+        ]
+
+    def test_find_chapter_boundary_candidates_finds_inline_chapters(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        lines = [
+            "# 目录",
+            "###### 封面 扉页 第一章 大脑——一切问题的起源 第二章 潜意识——生命留给我们的彩蛋",
+            "### 上篇 内观自己，摆脱焦虑 第一章 大脑——一切问题的起源 第一节 大脑：重新认识你自己",
+            "第一章正文。" * 30,
+            "### 第二章 潜意识——生命留给我们的彩蛋 第一节 模糊：人生是一场消除模糊的比赛",
+            "第二章正文。" * 30,
+        ]
+
+        candidates = parser._find_chapter_boundary_candidates(lines)
+        numbered = [c for c in candidates if c.kind == "chapter"]
+
+        assert [(c.chapter_number, c.title) for c in numbered] == [
+            (1, "大脑——一切问题的起源"),
+            (2, "潜意识——生命留给我们的彩蛋"),
+        ]
+
+    def test_is_toc_like_boundary_line_rejects_catalogue_fragments(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+
+        assert parser._is_toc_like_boundary_line(
+            "###### 封面 扉页 版权信息 自序 开启自我改变的原动力 上篇 内观自己，摆脱焦虑 第一章 大脑——一切问题的起源 第一节 大脑：重新认识你自己 第二章 潜意识——生命留给我们的彩蛋"
+        ) is True
+        assert parser._is_toc_like_boundary_line(
+            "###### 后记 共同改变，一起前行 参考文献"
+        ) is True
+        assert parser._is_toc_like_boundary_line(
+            "### 上篇 内观自己，摆脱焦虑 第一章 大脑——一切问题的起源 第一节 大脑：重新认识你自己"
+        ) is False
+
+    def test_strip_section_suffix_stops_before_section_marker(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+
+        assert parser._strip_section_suffix(
+            "大脑——一切问题的起源 第一节 大脑：重新认识你自己"
+        ) == "大脑——一切问题的起源"
+        assert parser._strip_section_suffix(
+            "潜意识——生命留给我们的彩蛋 第一节 模糊：人生是一场消除模糊的比赛"
+        ) == "潜意识——生命留给我们的彩蛋"
+
+    def test_split_markdown_supports_inline_part_chapter_section_headings(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "# 目录",
+            "###### 封面 扉页 版权信息 自序 开启自我改变的原动力 上篇 内观自己，摆脱焦虑 第一章 大脑——一切问题的起源 第一节 大脑：重新认识你自己 第二章 潜意识——生命留给我们的彩蛋 第一节 模糊：人生是一场消除模糊的比赛",
+            "###### 后记 共同改变，一起前行 参考文献",
+            "###### 送给我的女儿 周子琪",
+            "## 自序 开启自我改变的原动力",
+            "自序正文。" * 40,
+            "### 上篇 内观自己，摆脱焦虑 第一章 大脑——一切问题的起源 第一节 大脑：重新认识你自己",
+            "第一章正文。" * 80,
+            "### 第二章 潜意识——生命留给我们的彩蛋 第一节 模糊：人生是一场消除模糊的比赛",
+            "第二章正文。" * 80,
+            "### 下篇 外观世界，借力前行 第三章 专注力——情绪和智慧的交叉地带 第一节 情绪专注：提振注意力",
+            "第三章正文。" * 80,
+            "## 后记 共同改变，一起前行",
+            "后记正文。" * 40,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert [ch.title for ch in chapters] == [
+            "自序 开启自我改变的原动力",
+            "大脑——一切问题的起源",
+            "潜意识——生命留给我们的彩蛋",
+            "专注力——情绪和智慧的交叉地带",
+            "后记 共同改变，一起前行",
+        ]
+        assert "第一章正文" in chapters[1].text
+        assert "第二章正文" in chapters[2].text
+        assert "第三章正文" in chapters[3].text
+        assert "参考文献" not in chapters[0].title
+
     @patch("app.pipeline.parser.pymupdf4llm")
     @patch("app.pipeline.parser.fitz")
     def test_parse_pdf_uses_pymupdf4llm(self, mock_fitz, mock_pymupdf4llm):
@@ -320,6 +445,33 @@ class TestDocumentParser:
         assert chapters[0].page_end == 22
         assert chapters[1].page_start == 23
         assert chapters[1].page_end == 100
+
+    @patch("app.pipeline.parser.pymupdf4llm")
+    def test_build_page_index_does_not_infer_page_end_across_gaps(self, mock_pymupdf4llm):
+        from app.pipeline.parser import DocumentParser, RawChapter
+
+        # ch0 and ch2 have known pages; ch1 does not.
+        # ch0.page_end must remain None because ch1 (the immediately next chapter)
+        # has no page — spanning ch0's range all the way to ch2 would be wrong.
+        mock_pymupdf4llm.to_markdown.return_value = [
+            {"metadata": {"page": 5}, "text": "自序 开启自我改变"},
+            {"metadata": {"page": 267}, "text": "后记 共同改变，一起前行"},
+        ]
+        chapters = [
+            RawChapter(chapter_num=1, title="自序 开启自我改变", text="自序正文" * 100),
+            RawChapter(chapter_num=2, title="大脑", text="大脑正文" * 100),
+            RawChapter(chapter_num=3, title="后记 共同改变，一起前行", text="后记正文" * 100),
+        ]
+
+        parser = DocumentParser()
+        parser._build_page_index("/fake/path.pdf", chapters, page_count=300)
+
+        assert chapters[0].page_start == 5
+        assert chapters[0].page_end is None  # next chapter (大脑) has no page
+        assert chapters[1].page_start is None
+        assert chapters[1].page_end is None
+        assert chapters[2].page_start == 267
+        assert chapters[2].page_end == 300  # last chapter → page_count
 
     def test_split_markdown_warns_when_large_markdown_has_no_boundaries(self, caplog):
         from app.pipeline.parser import DocumentParser
