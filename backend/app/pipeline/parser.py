@@ -2,6 +2,7 @@
 文档解析器 — 支持 PDF (PyMuPDF) 和 EPUB (ebooklib)
 输出标准化的章节列表，供 chunker 分块使用
 """
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,8 @@ import fitz  # PyMuPDF
 import pymupdf4llm
 from bs4 import BeautifulSoup
 from ebooklib import epub
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,6 +34,16 @@ class ParsedBook:
     file_type: str  # 'pdf' | 'epub'
 
 
+@dataclass
+class ChapterBoundary:
+    line_index: int
+    body_start_line: int
+    kind: str  # "preface" | "chapter" | "afterword"
+    marker: str
+    chapter_number: int | None
+    title: str
+
+
 class DocumentParser:
     """解析 PDF / EPUB 文件，提取章节结构和正文"""
 
@@ -40,9 +53,35 @@ class DocumentParser:
         r"^(Preface|Contents|Index|Bibliography|Appendix)",
     ]
 
-    # 章节边界：独立的"第N章"行（中文数字或阿拉伯数字），兼容 `## 第N章`
-    CHAPTER_MARKER_RE = re.compile(r"^(?:#{1,6}\s*)?第[一二三四五六七八九十百\d]+章\s*$")
+    CHINESE_NUMERAL_MAP = {
+        "零": 0,
+        "一": 1,
+        "二": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+        "十": 10,
+    }
 
+    CHINESE_CHAPTER_RE = re.compile(
+        r"^(?:#{1,6}\s*)?第\s*(?P<num>[一二三四五六七八九十百\d]+)\s*章(?:\s+(?P<title>.+))?\s*$"
+    )
+    ENGLISH_CHAPTER_RE = re.compile(
+        r"^(?:#{1,6}\s*)?CHAPTER\s+(?P<num>\d+)(?:\s+(?P<title>.+))?\s*$",
+        re.IGNORECASE,
+    )
+    TOC_LIKE_CHAPTER_RE = re.compile(
+        r"^(?:#{1,6}\s*)?第\s*[一二三四五六七八九十百\d]+\s*章\s+\S+.*(?:\.{3,}|…{2,})\s*\d*\s*$"
+    )
+    # Matches English TOC entries like "CHAPTER 1 Foundations ........ 7"
+    ENGLISH_TOC_LIKE_CHAPTER_RE = re.compile(
+        r"^(?:#{1,6}\s*)?CHAPTER\s+\d+(?:\s+\S+.*)?(?:\.{3,}|…{2,})\s*\d*\s*$",
+        re.IGNORECASE,
+    )
     PREFACE_PATTERNS = [
         r"^#+\s*(PREFACE\s|再版序|初版序|序言)",
         r"^(PREFACE\s.*|再版序|初版序)\s*$",
@@ -137,73 +176,153 @@ class DocumentParser:
                 later = [p for p in sorted_pages if p > page]
                 ch.page_end = later[0] - 1 if later else page_count
 
-    def _split_markdown_into_chapters(self, markdown: str) -> list[RawChapter]:
-        """Split pymupdf4llm Markdown into chapters using '第N章' markers as boundaries.
+    def _clean_heading_marker(self, line: str) -> str:
+        return re.sub(r"^#{1,6}\s*", "", line.strip()).strip()
 
-        Heading level (# vs ##) is NOT used as a chapter boundary — only the
-        standalone '第N章' line is. The first heading after a marker becomes the
-        chapter title. Preface/afterword segments are detected separately.
-        """
-        lines = markdown.split("\n")
+    def _parse_chapter_number(self, value: str) -> int | None:
+        value = value.strip()
+        if value.isdigit():
+            return int(value)
 
-        # --- Pass 1: find chapter-marker line indices ---
-        marker_indices: list[int] = []
-        for i, line in enumerate(lines):
-            if self.CHAPTER_MARKER_RE.match(line.strip()):
-                marker_indices.append(i)
+        hundreds = 0
+        if "百" in value:
+            parts = value.split("百", 1)
+            h_char = parts[0]
+            hundreds = (self.CHINESE_NUMERAL_MAP.get(h_char, 1) if h_char else 1) * 100
+            value = parts[1].lstrip("零")  # strip zero-placeholder (e.g. 一百零一 → 一)
+            if not value:
+                return hundreds
 
-        # --- Pass 2: find preface/afterword start indices ---
-        special_indices: list[tuple[int, str]] = []  # (line_index, detected_title)
+        if not value:
+            return hundreds or None
+
+        if value.startswith("十"):
+            suffix = value[1:]
+            return hundreds + 10 + self.CHINESE_NUMERAL_MAP.get(suffix, 0)
+        if "十" in value:
+            prefix, suffix = value.split("十", 1)
+            tens = self.CHINESE_NUMERAL_MAP.get(prefix, 0) * 10
+            ones = self.CHINESE_NUMERAL_MAP.get(suffix, 0) if suffix else 0
+            return hundreds + tens + ones
+        single = self.CHINESE_NUMERAL_MAP.get(value)
+        return hundreds + single if single is not None else (hundreds or None)
+
+    def _next_content_line(self, lines: list[str], start: int) -> tuple[int, str] | None:
+        for idx in range(start, min(start + 5, len(lines))):
+            stripped = lines[idx].strip()
+            if not stripped:
+                continue
+            return idx, stripped
+        return None
+
+    def _resolve_boundary_title(
+        self,
+        lines: list[str],
+        marker_index: int,
+        inline_title: str | None,
+    ) -> tuple[str, int]:
+        if inline_title:
+            return self._clean_heading_marker(inline_title), marker_index + 1
+
+        next_line = self._next_content_line(lines, marker_index + 1)
+        if next_line is None:
+            return self._clean_heading_marker(lines[marker_index]), marker_index + 1
+
+        line_idx, line = next_line
+        heading_match = re.match(r"^#{1,6}\s+(.+)", line)
+        title = heading_match.group(1).strip() if heading_match else line
+        return title, line_idx + 1
+
+    def _detect_special_boundary(self, line_index: int, stripped: str) -> ChapterBoundary | None:
+        for pat in self.PREFACE_PATTERNS:
+            if re.match(pat, stripped, re.IGNORECASE):
+                title = self._clean_heading_marker(stripped)
+                return ChapterBoundary(line_index, line_index + 1, "preface", title, None, title)
+
+        for pat in self.AFTERWORD_PATTERNS:
+            if re.match(pat, stripped, re.IGNORECASE):
+                title = self._clean_heading_marker(stripped)
+                return ChapterBoundary(line_index, line_index + 1, "afterword", title, None, title)
+
+        return None
+
+    def _find_chapter_boundaries(self, lines: list[str]) -> list[ChapterBoundary]:
+        boundaries: list[ChapterBoundary] = []
+        last_chapter_number = 0
+
         for i, line in enumerate(lines):
             stripped = line.strip()
-            for pat in self.PREFACE_PATTERNS:
-                if re.match(pat, stripped, re.IGNORECASE):
-                    title = re.sub(r"^#+\s*", "", stripped).strip()
-                    special_indices.append((i, title))
-                    break
-            for pat in self.AFTERWORD_PATTERNS:
-                if re.match(pat, stripped, re.IGNORECASE):
-                    title = re.sub(r"^#+\s*", "", stripped).strip()
-                    special_indices.append((i, title))
-                    break
+            if not stripped:
+                continue
+            if self.TOC_LIKE_CHAPTER_RE.match(stripped):
+                continue
+            if self.ENGLISH_TOC_LIKE_CHAPTER_RE.match(stripped):
+                continue
 
-        # --- Pass 3: merge and sort all boundary indices ---
-        boundaries: list[tuple[int, str | None]] = []
-        for idx in marker_indices:
-            boundaries.append((idx, None))  # title resolved in pass 4
-        for idx, title in special_indices:
-            boundaries.append((idx, title))
-        boundaries.sort(key=lambda x: x[0])
+            special_boundary = self._detect_special_boundary(i, stripped)
+            if special_boundary is not None:
+                boundaries.append(special_boundary)
+                continue
+
+            chapter_match = self.CHINESE_CHAPTER_RE.match(stripped)
+            marker_prefix = "第"
+            if chapter_match is None:
+                chapter_match = self.ENGLISH_CHAPTER_RE.match(stripped)
+                marker_prefix = "CHAPTER "
+            if chapter_match is None:
+                continue
+
+            chapter_number = self._parse_chapter_number(chapter_match.group("num"))
+            if chapter_number is None:
+                continue
+            if chapter_number <= last_chapter_number:
+                continue
+
+            title, body_start_line = self._resolve_boundary_title(
+                lines,
+                i,
+                chapter_match.groupdict().get("title"),
+            )
+            if not title or self._is_noise(title):
+                continue
+
+            marker = f"{marker_prefix}{chapter_match.group('num')}章" if marker_prefix == "第" else f"CHAPTER {chapter_number}"
+            boundaries.append(
+                ChapterBoundary(
+                    line_index=i,
+                    body_start_line=body_start_line,
+                    kind="chapter",
+                    marker=marker,
+                    chapter_number=chapter_number,
+                    title=title,
+                )
+            )
+            last_chapter_number = chapter_number
+
+        boundaries.sort(key=lambda b: b.line_index)
+        return boundaries
+
+    def _split_markdown_into_chapters(self, markdown: str) -> list[RawChapter]:
+        """Split pymupdf4llm Markdown into chapters using detected ChapterBoundary objects.
+
+        Two-stage: detect clean ChapterBoundary objects, then resolve chapter segments.
+        Supports Chinese chapter markers (第N章), English CHAPTER N, inline titles,
+        heading+plain-title variants, and preface/afterword detection.
+        """
+        lines = markdown.split("\n")
+        boundaries = self._find_chapter_boundaries(lines)
 
         if not boundaries:
+            if len(markdown) > 5000:
+                logger.warning("No chapter boundaries detected in large PDF markdown output.")
             return []
 
-        # --- Pass 4: extract segments ---
         chapters: list[RawChapter] = []
-        for b_pos, (start_idx, preset_title) in enumerate(boundaries):
-            end_idx = boundaries[b_pos + 1][0] if b_pos + 1 < len(boundaries) else len(lines)
+        for b_pos, boundary in enumerate(boundaries):
+            start_idx = boundary.line_index
+            end_idx = boundaries[b_pos + 1].line_index if b_pos + 1 < len(boundaries) else len(lines)
             segment_lines = lines[start_idx:end_idx]
-
-            # Resolve title: preset (preface/afterword) or first heading after marker.
-            # Preset titles are always kept — _is_noise only applies to titles resolved
-            # heuristically, since NOISE_PATTERNS includes "Preface" which would otherwise
-            # strip out the very preface segments PREFACE_PATTERNS deliberately detects.
-            title = preset_title
-            body_start = 1  # skip the marker/heading line itself
-            if title is None:
-                for j, sl in enumerate(segment_lines[1:], start=1):
-                    stripped = sl.strip()
-                    if not stripped:
-                        continue
-                    heading_match = re.match(r"^#{1,6}\s+(.+)", stripped)
-                    title = heading_match.group(1).strip() if heading_match else stripped
-                    body_start = j + 1
-                    break
-                if title is None:
-                    title = re.sub(r"^#+\s*", "", segment_lines[0].strip()).strip()
-
-                if self._is_noise(title):
-                    continue
+            body_start = max(1, boundary.body_start_line - start_idx)
 
             text = "\n".join(segment_lines[body_start:]).strip()
             if len(text) < 100:
@@ -211,7 +330,7 @@ class DocumentParser:
 
             chapters.append(RawChapter(
                 chapter_num=len(chapters) + 1,
-                title=title,
+                title=boundary.title,
                 text=text,
             ))
 

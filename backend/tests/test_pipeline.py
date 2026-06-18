@@ -141,6 +141,114 @@ class TestDocumentParser:
         assert "小节内容" in chapters[1].text
         assert "第二章正文" in chapters[2].text
 
+    def test_split_markdown_supports_inline_chapter_title_markers(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "# 前言",
+            "前言正文。" * 30,
+            "第一章 认知觉醒",
+            "第一章正文。" * 30,
+            "## 第一节 不要误拆",
+            "第一章小节。" * 20,
+            "第二章 潜意识——生命留给我们的彩蛋",
+            "第二章正文。" * 30,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert [ch.title for ch in chapters] == [
+            "认知觉醒",
+            "潜意识——生命留给我们的彩蛋",
+        ]
+        assert "第一章正文" in chapters[0].text
+        assert "第一章小节" in chapters[0].text
+        assert "第二章正文" in chapters[1].text
+
+    def test_split_markdown_supports_english_chapter_markers(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "CHAPTER 1 Foundations",
+            "Chapter one body. " * 80,
+            "## Background",
+            "Background body. " * 40,
+            "## CHAPTER 2",
+            "Systems",
+            "Chapter two body. " * 80,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert [ch.title for ch in chapters] == ["Foundations", "Systems"]
+        assert "Background body" in chapters[0].text
+        assert "Chapter two body" in chapters[1].text
+
+    def test_split_markdown_ignores_toc_like_chapter_lines(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "目录",
+            "第1章 是非对错的底层逻辑 .......... 7",
+            "第2章 思考问题的底层逻辑 .......... 23",
+            "## 第1章",
+            "是非对错的底层逻辑",
+            "第一章正文。" * 30,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert len(chapters) == 1
+        assert chapters[0].title == "是非对错的底层逻辑"
+
+    def test_split_markdown_ignores_english_toc_like_chapter_lines(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "Contents",
+            "CHAPTER 1 Foundations ........ 7",
+            "CHAPTER 2 Systems ........ 23",
+            "CHAPTER 1 Foundations",
+            "Chapter one body. " * 80,
+            "## Background",
+            "Background body. " * 40,
+            "CHAPTER 2 Systems",
+            "Chapter two body. " * 80,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert [ch.title for ch in chapters] == ["Foundations", "Systems"]
+        assert "Chapter one body" in chapters[0].text
+        assert "Background body" in chapters[0].text
+        assert "Chapter two body" in chapters[1].text
+
+    def test_split_markdown_requires_monotonic_chapter_numbers(self):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "\n\n".join([
+            "第1章",
+            "开篇",
+            "第一章正文。" * 30,
+            "第1章",
+            "目录页重复标题",
+            "这段不应成为新章节。" * 30,
+            "第2章",
+            "发展",
+            "第二章正文。" * 30,
+        ])
+
+        chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert [ch.title for ch in chapters] == ["开篇", "发展"]
+        assert "目录页重复标题" in chapters[0].text
+        assert "第二章正文" in chapters[1].text
+
     @patch("app.pipeline.parser.pymupdf4llm")
     @patch("app.pipeline.parser.fitz")
     def test_parse_pdf_uses_pymupdf4llm(self, mock_fitz, mock_pymupdf4llm):
@@ -210,6 +318,18 @@ class TestDocumentParser:
         assert chapters[0].page_end == 22
         assert chapters[1].page_start == 23
         assert chapters[1].page_end == 100
+
+    def test_split_markdown_warns_when_large_markdown_has_no_boundaries(self, caplog):
+        from app.pipeline.parser import DocumentParser
+
+        parser = DocumentParser()
+        markdown = "正文内容。" * 5000
+
+        with caplog.at_level("WARNING"):
+            chapters = parser._split_markdown_into_chapters(markdown)
+
+        assert chapters == []
+        assert "No chapter boundaries detected" in caplog.text
 
 
 # ─── Chunker 测试 ────────────────────────────────────────────────────────────
