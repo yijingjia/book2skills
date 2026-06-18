@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import books, chat, skills
+from app.api.routes import books, chat, collections, skills
 from app.core.config import settings
 
 # 配置基础日志，确保 INFO 级别和以上内容能输出到 console
@@ -37,6 +37,7 @@ app.add_middleware(
 )
 
 app.include_router(books.router)
+app.include_router(collections.router)
 app.include_router(skills.router)
 app.include_router(chat.router)
 

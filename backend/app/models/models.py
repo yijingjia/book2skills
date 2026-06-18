@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,11 @@ class Book(Base):
 
     chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
     skill_packages: Mapped[list["SkillPackage"]] = relationship("SkillPackage", back_populates="book", cascade="all, delete-orphan")
+    collection_memberships: Mapped[list["CollectionBook"]] = relationship(
+        "CollectionBook",
+        back_populates="book",
+        cascade="all, delete-orphan",
+    )
 
 
 class Chapter(Base):
@@ -41,6 +46,50 @@ class Chapter(Base):
     summary: Mapped[str | None] = mapped_column(Text)
 
     book: Mapped["Book"] = relationship("Book", back_populates="chapters")
+
+
+class Collection(Base):
+    __tablename__ = "collections"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    books: Mapped[list["CollectionBook"]] = relationship(
+        "CollectionBook",
+        back_populates="collection",
+        cascade="all, delete-orphan",
+        order_by="CollectionBook.order_index",
+    )
+
+
+class CollectionBook(Base):
+    __tablename__ = "collection_books"
+    __table_args__ = (
+        UniqueConstraint("collection_id", "book_id", name="uq_collection_books_collection_book"),
+        UniqueConstraint("collection_id", "order_index", name="uq_collection_books_collection_order"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("collections.id", ondelete="CASCADE"),
+        index=True,
+    )
+    book_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("books.id", ondelete="CASCADE"),
+        index=True,
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    collection: Mapped["Collection"] = relationship("Collection", back_populates="books")
+    book: Mapped["Book"] = relationship("Book", back_populates="collection_memberships")
 
 
 class SkillPackage(Base):

@@ -58,6 +58,90 @@ class BookDetailResponse(BaseModel):
         from_attributes = True
 
 
+# ─── Collection Schemas ─────────────────────────────────────────────────────
+
+class CollectionBookSummary(BaseModel):
+    book_id: uuid.UUID
+    title: str | None
+    author: str | None
+    status: str
+    page_count: int | None
+    order_index: int
+
+
+class CollectionCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=500)
+    description: str | None = None
+    book_ids: list[uuid.UUID] = Field(..., min_length=2)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("collection name cannot be blank")
+        return v.strip()
+
+    @field_validator("book_ids")
+    @classmethod
+    def book_ids_must_be_unique(cls, v: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(set(v)) != len(v):
+            raise ValueError("book_ids must be unique")
+        return v
+
+
+class CollectionUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=500)
+    description: str | None = None
+    book_ids: list[uuid.UUID] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def optional_name_must_not_be_blank(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("collection name cannot be blank")
+        return v.strip() if v is not None else None
+
+    @field_validator("book_ids")
+    @classmethod
+    def optional_book_ids_must_be_unique(
+        cls,
+        v: list[uuid.UUID] | None,
+    ) -> list[uuid.UUID] | None:
+        if v is None:
+            return None
+        if len(v) < 2:
+            raise ValueError("a collection requires at least two books")
+        if len(set(v)) != len(v):
+            raise ValueError("book_ids must be unique")
+        return v
+
+
+class CollectionListResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    status: str
+    book_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CollectionDetailResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    status: str
+    books: list[CollectionBookSummary]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ─── 5-Layer Pipeline Core Schemas ─────────────────────────────────────────────
 
 class KnowledgeUnit(BaseModel):

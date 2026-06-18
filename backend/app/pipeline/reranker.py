@@ -74,9 +74,21 @@ class BM25Reranker:
         bm25 = BM25Okapi(tokenized_corpus)
         raw_bm25_scores = bm25.get_scores(tokenized_query)
 
-        # Normalize BM25 scores to [0, 1]
-        max_bm25 = max(raw_bm25_scores) if max(raw_bm25_scores) > 0 else 1.0
-        normalized_bm25 = [float(s) / max_bm25 for s in raw_bm25_scores]
+        # Normalize BM25 scores to [0, 1]. BM25 can return all zeros for tiny
+        # candidate pools, so fall back to direct query-token overlap.
+        max_bm25 = max(raw_bm25_scores) if max(raw_bm25_scores) > 0 else 0.0
+        if max_bm25 > 0:
+            normalized_bm25 = [float(s) / max_bm25 for s in raw_bm25_scores]
+        else:
+            query_terms = set(tokenized_query)
+            overlap_scores = [
+                len(query_terms.intersection(tokens)) / len(query_terms)
+                if query_terms
+                else 0.0
+                for tokens in tokenized_corpus
+            ]
+            max_overlap = max(overlap_scores) if max(overlap_scores) > 0 else 1.0
+            normalized_bm25 = [float(s) / max_overlap for s in overlap_scores]
 
         # Normalize vector scores to [0, 1]
         vector_scores = [c.score for c in chunks]
