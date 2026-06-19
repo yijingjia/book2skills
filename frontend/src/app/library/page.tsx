@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Plus, Loader2, BookOpen, AlertCircle, Inbox } from 'lucide-react'
-import { listBooks, generateSkill } from '@/lib/api'
+import { Plus, Loader2, BookOpen, AlertCircle, Inbox, Layers } from 'lucide-react'
+import { CollectionSummary, listBooks, generateSkill, listCollections } from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
 
 type Book = {
@@ -22,9 +22,11 @@ export default function LibraryPage() {
   const { t, locale } = useI18n()
   const router = useRouter()
   const [books, setBooks] = useState<Book[]>([])
+  const [collections, setCollections] = useState<CollectionSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [generatingFor, setGeneratingFor] = useState<string | null>(null)
+  const recentCollections = collections.slice(0, 5)
 
   const handleRegenerate = async (bookId: string) => {
     setGeneratingFor(bookId)
@@ -38,9 +40,17 @@ export default function LibraryPage() {
   }
 
   useEffect(() => {
-    listBooks()
-      .then(setBooks)
-      .catch(() => setError('library.loadFailed'))
+    Promise.allSettled([listBooks(), listCollections()])
+      .then(([booksResult, collectionsResult]) => {
+        if (booksResult.status === 'rejected') {
+          setError('library.loadFailed')
+          return
+        }
+        setBooks(booksResult.value)
+        if (collectionsResult.status === 'fulfilled') {
+          setCollections(collectionsResult.value)
+        }
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -68,10 +78,16 @@ export default function LibraryPage() {
           book2skills
         </Link>
 
-        <Link href="/" className="btn-primary" style={{ textDecoration: 'none' }}>
-          <Plus size={14} strokeWidth={2} />
-          {t('library.uploadNewBook')}
-        </Link>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <Link href="/collections/new" className="btn-secondary" style={{ textDecoration: 'none' }}>
+            <Layers size={14} strokeWidth={2} />
+            {t('collections.new')}
+          </Link>
+          <Link href="/" className="btn-primary" style={{ textDecoration: 'none' }}>
+            <Plus size={14} strokeWidth={2} />
+            {t('library.uploadNewBook')}
+          </Link>
+        </div>
       </nav>
 
       {/* Header */}
@@ -133,6 +149,37 @@ export default function LibraryPage() {
         </div>
       )}
 
+      {/* Collection list */}
+      {!loading && !error && (books.length > 0 || collections.length > 0) && (
+        <section style={{ marginBottom: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 500 }}>
+              {t('collections.librarySection')}
+            </h2>
+            <Link href="/collections" style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', textDecoration: 'none' }}>
+              {t('collections.viewAll')}
+            </Link>
+          </div>
+
+          {collections.length > 0 ? (
+            <div style={{ borderTop: '1px solid var(--border)' }}>
+              {recentCollections.map((collection, i) => (
+                <CollectionRow
+                  key={collection.id}
+                  collection={collection}
+                  isLast={i === recentCollections.length - 1}
+                  locale={locale}
+                />
+              ))}
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', padding: '12px 0' }}>
+              {t('collections.empty')}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Book list */}
       {!loading && !error && books.length > 0 && (
         <div>
@@ -149,6 +196,69 @@ export default function LibraryPage() {
         </div>
       )}
     </main>
+  )
+}
+
+function CollectionRow({
+  collection, isLast, locale,
+}: {
+  collection: CollectionSummary
+  isLast: boolean
+  locale: 'zh' | 'en'
+}) {
+  const { t } = useI18n()
+
+  return (
+    <Link
+      href={`/collections/${collection.id}`}
+      style={{
+        padding: '16px 0',
+        borderBottom: isLast ? 'none' : '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px',
+        color: 'var(--text-primary)',
+        textDecoration: 'none',
+      }}
+    >
+      <div style={{
+        width: '34px',
+        height: '34px',
+        borderRadius: '6px',
+        background: 'var(--bg-raised)',
+        border: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+      }}>
+        <Layers size={15} strokeWidth={1.5} style={{ color: 'var(--text-muted)' }} />
+      </div>
+
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{
+          fontWeight: 500,
+          fontSize: 'var(--text-sm)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          marginBottom: '4px',
+        }}>
+          {collection.name}
+        </div>
+        <div style={{
+          fontSize: 'var(--text-xs)',
+          color: 'var(--text-muted)',
+          display: 'flex',
+          gap: 'var(--space-3)',
+          flexWrap: 'wrap',
+        }}>
+          {collection.description && <span>{collection.description}</span>}
+          <span>{t('collections.bookCount', { count: collection.book_count })}</span>
+          <span>{new Date(collection.created_at).toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US')}</span>
+        </div>
+      </div>
+    </Link>
   )
 }
 

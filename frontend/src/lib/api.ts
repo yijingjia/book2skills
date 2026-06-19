@@ -23,6 +23,42 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export type CollectionBookSummary = {
+  book_id: string
+  title: string | null
+  author: string | null
+  status: string
+  page_count: number | null
+  order_index: number
+}
+
+export type CollectionSummary = {
+  id: string
+  name: string
+  description: string | null
+  status: string
+  book_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type CollectionDetail = CollectionSummary & {
+  books: CollectionBookSummary[]
+}
+
+export type CollectionSkill = {
+  id: string
+  collection_id: string
+  skill_md: string | null
+  scripts: Record<string, unknown> | null
+  templates: Record<string, unknown> | null
+  zip_path: string | null
+  version: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
 // ─── Books ───────────────────────────────────────────────────────────────────
 
 export async function uploadBook(file: File) {
@@ -49,6 +85,60 @@ export async function listBooks() {
     status: string; page_count: number | null; created_at: string;
     skill_id: string | null; skill_status: string | null;
   }>>(`/api/books`)
+}
+
+// ─── Collections ─────────────────────────────────────────────────────────────
+
+export async function listCollections() {
+  return request<CollectionSummary[]>(`/api/collections`)
+}
+
+export async function createCollection(input: {
+  name: string
+  description?: string | null
+  book_ids: string[]
+}) {
+  return request<CollectionDetail>(`/api/collections`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function getCollection(collectionId: string) {
+  return request<CollectionDetail>(`/api/collections/${collectionId}`)
+}
+
+export async function updateCollection(
+  collectionId: string,
+  input: { name?: string; description?: string | null; book_ids?: string[] }
+) {
+  return request<CollectionDetail>(`/api/collections/${collectionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteCollection(collectionId: string) {
+  return request<{ message: string }>(`/api/collections/${collectionId}`, {
+    method: 'DELETE',
+  })
+}
+
+// ─── Collection Skills ───────────────────────────────────────────────────────
+
+export async function getCollectionSkill(skillId: string) {
+  return request<CollectionSkill>(`/api/collection-skills/${skillId}`)
+}
+
+export async function packCollectionSkill(skillId: string) {
+  return request<{ skill_package_id: string; zip_path: string; message: string }>(
+    `/api/collection-skills/${skillId}/pack`,
+    { method: 'POST' }
+  )
+}
+
+export function getCollectionSkillDownloadUrl(skillId: string) {
+  return `${API_BASE}/api/collection-skills/${skillId}/download`
 }
 
 // ─── Skills ──────────────────────────────────────────────────────────────────
