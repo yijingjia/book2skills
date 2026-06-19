@@ -142,6 +142,22 @@ class CollectionDetailResponse(BaseModel):
         from_attributes = True
 
 
+class CollectionSkillPackageResponse(BaseModel):
+    id: uuid.UUID
+    collection_id: uuid.UUID
+    skill_md: str | None
+    scripts: dict | None
+    templates: dict | None
+    zip_path: str | None = None
+    version: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ─── 5-Layer Pipeline Core Schemas ─────────────────────────────────────────────
 
 class KnowledgeUnit(BaseModel):

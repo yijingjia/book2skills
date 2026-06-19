@@ -65,6 +65,11 @@ class Collection(Base):
         cascade="all, delete-orphan",
         order_by="CollectionBook.order_index",
     )
+    skill_packages: Mapped[list["CollectionSkillPackage"]] = relationship(
+        "CollectionSkillPackage",
+        back_populates="collection",
+        cascade="all, delete-orphan",
+    )
 
 
 class CollectionBook(Base):
@@ -90,6 +95,28 @@ class CollectionBook(Base):
 
     collection: Mapped["Collection"] = relationship("Collection", back_populates="books")
     book: Mapped["Book"] = relationship("Book", back_populates="collection_memberships")
+
+
+class CollectionSkillPackage(Base):
+    __tablename__ = "collection_skill_packages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("collections.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    skill_md: Mapped[str | None] = mapped_column(Text)
+    scripts: Mapped[dict | None] = mapped_column(JSONB)
+    templates: Mapped[dict | None] = mapped_column(JSONB)
+    zip_path: Mapped[str | None] = mapped_column(String(1000))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(50), default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    collection: Mapped["Collection"] = relationship("Collection", back_populates="skill_packages")
 
 
 class SkillPackage(Base):

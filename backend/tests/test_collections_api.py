@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes.collections import (
+    _build_collection_book_memberships,
     _build_collection_detail_response,
     _build_collection_list_response,
     _validate_ready_books,
@@ -100,3 +101,15 @@ def test_build_collection_list_response_counts_books():
 
     assert response.book_count == 2
     assert response.status == "active"
+
+
+def test_build_collection_book_memberships_preserves_order():
+    collection_id = uuid.uuid4()
+    first = make_book(uuid.uuid4(), title="First")
+    second = make_book(uuid.uuid4(), title="Second")
+
+    memberships = _build_collection_book_memberships(collection_id, [first, second])
+
+    assert [membership.collection_id for membership in memberships] == [collection_id, collection_id]
+    assert [membership.book_id for membership in memberships] == [first.id, second.id]
+    assert [membership.order_index for membership in memberships] == [0, 1]

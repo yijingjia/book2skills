@@ -92,10 +92,13 @@ async def _get_collection_or_404(
     return collection
 
 
-def _replace_collection_books(collection: Collection, books: list[Book]) -> None:
-    collection.books = [
+def _build_collection_book_memberships(
+    collection_id: uuid.UUID,
+    books: list[Book],
+) -> list[CollectionBook]:
+    return [
         CollectionBook(
-            collection_id=collection.id,
+            collection_id=collection_id,
             book_id=book.id,
             book=book,
             order_index=index,
@@ -128,7 +131,7 @@ async def create_collection(
     )
     db.add(collection)
     await db.flush()
-    _replace_collection_books(collection, books)
+    db.add_all(_build_collection_book_memberships(collection.id, books))
     await db.commit()
 
     created = await _get_collection_or_404(collection.id, db)
@@ -163,7 +166,7 @@ async def update_collection(
         )
         collection.books.clear()
         await db.flush()
-        _replace_collection_books(collection, books)
+        db.add_all(_build_collection_book_memberships(collection.id, books))
 
     await db.commit()
     updated = await _get_collection_or_404(collection_id, db)
