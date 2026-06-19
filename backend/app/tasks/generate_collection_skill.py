@@ -101,6 +101,7 @@ async def _generate_collection_skill_async(
     skill_gen = None
     router_gen = None
     embedder = None
+    package = None
 
     async with async_session() as db:
         current_phase = "init"
@@ -201,10 +202,13 @@ async def _generate_collection_skill_async(
 
             async def _bounded_skill(theme_name: str, group_kus: list):
                 async with skill_sem:
+                    combined_hint = (
+                        f"{theme_name}（用户目标：{user_goal}）" if user_goal else theme_name
+                    )
                     return await skill_gen.generate_modular_skill(
                         book_title=collection.name,
                         knowledge_units=group_kus,
-                        theme_hint=theme_name,
+                        theme_hint=combined_hint,
                     )
 
             async def _run_skill(theme_name: str, group_kus: list):
@@ -276,12 +280,13 @@ async def _generate_collection_skill_async(
 
         except Exception as exc:
             logger.error("Error generating collection skill %s: %s", skill_package_id, exc, exc_info=True)
-            package.status = "error"
-            package.scripts = {
-                **(package.scripts or {}),
-                "pipeline_phase": f"failed_at_{current_phase}",
-                "failed_reason": str(exc),
-            }
+            if package is not None:
+                package.status = "error"
+                package.scripts = {
+                    **(package.scripts or {}),
+                    "pipeline_phase": f"failed_at_{current_phase}",
+                    "failed_reason": str(exc),
+                }
 
         finally:
             for component in (cluster_gen, skill_gen, router_gen):

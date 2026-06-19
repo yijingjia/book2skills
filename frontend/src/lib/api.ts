@@ -124,6 +124,16 @@ export async function deleteCollection(collectionId: string) {
   })
 }
 
+export async function generateCollectionSkill(
+  collectionId: string,
+  input: { user_goal?: string | null; reuse_extracted_kus?: boolean; detect_conflicts?: boolean }
+) {
+  return request<CollectionSkill>(`/api/collections/${collectionId}/generate`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 // ─── Collection Skills ───────────────────────────────────────────────────────
 
 export async function getCollectionSkill(skillId: string) {

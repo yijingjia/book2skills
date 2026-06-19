@@ -2,18 +2,21 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, BookOpen, Layers, Loader2 } from 'lucide-react'
-import { CollectionDetail, getCollection } from '@/lib/api'
+import { CollectionDetail, generateCollectionSkill, getCollection } from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
 
 export default function CollectionDetailPage() {
   const { t } = useI18n()
   const params = useParams()
+  const router = useRouter()
   const collectionId = params.collectionId as string
   const [collection, setCollection] = useState<CollectionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [userGoal, setUserGoal] = useState('')
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     if (!collectionId) return
@@ -22,6 +25,24 @@ export default function CollectionDetailPage() {
       .catch(() => setError(t('collections.loadFailed')))
       .finally(() => setLoading(false))
   }, [collectionId, t])
+
+  const handleGenerate = async () => {
+    if (!collection || generating) return
+    setGenerating(true)
+    setError(null)
+    try {
+      const skill = await generateCollectionSkill(collection.id, {
+        user_goal: userGoal.trim() || null,
+        reuse_extracted_kus: true,
+        detect_conflicts: true,
+      })
+      router.push(`/collections/${collection.id}/skills/${skill.id}`)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('collections.generateFailed')
+      setError(msg)
+      setGenerating(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -82,14 +103,27 @@ export default function CollectionDetailPage() {
                 </p>
               )}
             </div>
-            <button
-              className="btn-secondary"
-              disabled
-              title={t('collections.generateComingSoon')}
-              style={{ whiteSpace: 'normal', maxWidth: '220px', textAlign: 'center' }}
-            >
-              {t('collections.generateComingSoon')}
-            </button>
+            <div style={{ display: 'grid', gap: '8px', minWidth: '220px', maxWidth: '280px' }}>
+              <input
+                value={userGoal}
+                onChange={e => setUserGoal(e.target.value)}
+                placeholder={t('collections.userGoalPlaceholder')}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  background: 'var(--bg)',
+                  color: 'var(--text-primary)',
+                  font: 'inherit',
+                  fontSize: 'var(--text-xs)',
+                  padding: '10px 12px',
+                  outline: 'none',
+                }}
+              />
+              <button className="btn-primary" disabled={generating} onClick={handleGenerate}>
+                {generating && <Loader2 size={14} style={{ animation: 'spin 1.4s linear infinite' }} />}
+                {generating ? t('collections.generating') : t('collections.generate')}
+              </button>
+            </div>
           </header>
 
           <section>
