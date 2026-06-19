@@ -4,8 +4,10 @@ import json
 import logging
 import re
 import uuid
+from datetime import UTC, datetime
 
 from app.core.config import settings
+from app.core.llm import get_chat_model, get_generation_model
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -13,6 +15,26 @@ logger = logging.getLogger(__name__)
 
 def _json(data) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _build_model_config() -> dict:
+    if settings.EMBEDDING_PROVIDER == "qwen":
+        embedding_model = settings.QWEN_EMBEDDING_MODEL
+    else:
+        embedding_model = settings.OPENAI_EMBEDDING_MODEL
+
+    return {
+        "llm_provider": settings.LLM_PROVIDER,
+        "generation_model": get_generation_model(),
+        "chat_model": get_chat_model(),
+        "embedding_provider": settings.EMBEDDING_PROVIDER,
+        "embedding_model": embedding_model,
+        "embedding_dimension": settings.EMBEDDING_DIMENSION,
+    }
 
 
 def _render_collection_skill_report(
@@ -110,6 +132,15 @@ async def _generate_collection_skill_async(
             if not package:
                 logger.error("CollectionSkillPackage %s not found", skill_package_id)
                 return
+            package.scripts = _checkpoint_scripts(
+                package.scripts,
+                "started",
+                {
+                    "started_at": _utc_now_iso(),
+                    "model_config.json": _json(_build_model_config()),
+                },
+            )
+            await db.commit()
 
             # Step 1-3: load collection + books
             current_phase = "loading_collection"
@@ -274,6 +305,7 @@ async def _generate_collection_skill_async(
             package.scripts = {
                 **scripts_dict,
                 "pipeline_phase": "completed",
+                "completed_at": _utc_now_iso(),
             }
             package.status = "ready"
             logger.info("Collection pipeline complete. Package %s is ready.", skill_package_id)
@@ -285,6 +317,7 @@ async def _generate_collection_skill_async(
                 package.scripts = {
                     **(package.scripts or {}),
                     "pipeline_phase": f"failed_at_{current_phase}",
+                    "failed_at": _utc_now_iso(),
                     "failed_reason": str(exc),
                 }
 

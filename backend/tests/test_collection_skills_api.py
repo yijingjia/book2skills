@@ -42,6 +42,16 @@ def test_build_collection_skill_response():
     assert response.id == package.id
     assert response.collection_id == package.collection_id
     assert response.status == "ready"
+    assert response.is_retryable is False
+
+
+def test_build_collection_skill_response_marks_error_retryable():
+    package = make_package(status="error", skill_md=None)
+
+    response = _build_collection_skill_response(package)
+
+    assert response.status == "error"
+    assert response.is_retryable is True
 
 
 def test_ensure_packable_collection_skill_rejects_non_ready():

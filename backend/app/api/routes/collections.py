@@ -1,5 +1,6 @@
 """API 路由 — Collection 书单管理"""
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
@@ -13,6 +14,7 @@ from app.schemas.schemas import (
     CollectionCreateRequest,
     CollectionDetailResponse,
     CollectionListResponse,
+    CollectionSkillPackageListItem,
     CollectionSkillPackageResponse,
     CollectionUpdateRequest,
     GenerateCollectionSkillRequest,
@@ -20,6 +22,7 @@ from app.schemas.schemas import (
 from app.tasks.generate_collection_skill import generate_collection_skill_task
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
+STALE_GENERATING_AFTER = timedelta(minutes=30)
 
 
 def _validate_ready_books(book_ids: list[uuid.UUID], books: list[Book]) -> list[Book]:
@@ -72,6 +75,35 @@ def _build_collection_detail_response(collection: Collection) -> CollectionDetai
         books=books,
         created_at=collection.created_at,
         updated_at=collection.updated_at,
+    )
+
+
+def _is_retryable_collection_skill(package: CollectionSkillPackage) -> bool:
+    if package.status == "error":
+        return True
+    if package.status != "generating":
+        return False
+    created_at = package.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - created_at > STALE_GENERATING_AFTER
+
+
+def _build_collection_skill_list_item(
+    package: CollectionSkillPackage,
+) -> CollectionSkillPackageListItem:
+    scripts = package.scripts or {}
+    return CollectionSkillPackageListItem(
+        id=package.id,
+        collection_id=package.collection_id,
+        status=package.status,
+        zip_path=package.zip_path,
+        version=package.version,
+        pipeline_phase=scripts.get("pipeline_phase"),
+        failed_reason=scripts.get("failed_reason"),
+        is_retryable=_is_retryable_collection_skill(package),
+        created_at=package.created_at,
+        updated_at=package.updated_at,
     )
 
 
@@ -181,6 +213,21 @@ async def generate_collection_skill(
     )
 
     return CollectionSkillPackageResponse.model_validate(package)
+
+
+@router.get("/{collection_id}/skills", response_model=list[CollectionSkillPackageListItem])
+async def list_collection_skills(
+    collection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_collection_or_404(collection_id, db)
+    result = await db.execute(
+        select(CollectionSkillPackage)
+        .where(CollectionSkillPackage.collection_id == collection_id)
+        .order_by(CollectionSkillPackage.created_at.desc())
+    )
+    packages = list(result.scalars().all())
+    return [_build_collection_skill_list_item(package) for package in packages]
 
 
 @router.get("/{collection_id}", response_model=CollectionDetailResponse)

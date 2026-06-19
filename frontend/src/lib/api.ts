@@ -55,6 +55,20 @@ export type CollectionSkill = {
   zip_path: string | null
   version: number
   status: string
+  is_retryable: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type CollectionSkillRun = {
+  id: string
+  collection_id: string
+  status: string
+  zip_path: string | null
+  version: number
+  pipeline_phase: string | null
+  failed_reason: string | null
+  is_retryable: boolean
   created_at: string
   updated_at: string
 }
@@ -108,6 +122,10 @@ export async function getCollection(collectionId: string) {
   return request<CollectionDetail>(`/api/collections/${collectionId}`)
 }
 
+export async function listCollectionSkills(collectionId: string) {
+  return request<CollectionSkillRun[]>(`/api/collections/${collectionId}/skills`)
+}
+
 export async function updateCollection(
   collectionId: string,
   input: { name?: string; description?: string | null; book_ids?: string[] }
@@ -145,6 +163,16 @@ export async function packCollectionSkill(skillId: string) {
     `/api/collection-skills/${skillId}/pack`,
     { method: 'POST' }
   )
+}
+
+export async function retryCollectionSkill(
+  skillId: string,
+  input: { user_goal?: string | null; detect_conflicts?: boolean } = {}
+) {
+  return request<CollectionSkill>(`/api/collection-skills/${skillId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export function getCollectionSkillDownloadUrl(skillId: string) {

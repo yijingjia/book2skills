@@ -151,6 +151,23 @@ class CollectionSkillPackageResponse(BaseModel):
     zip_path: str | None = None
     version: int
     status: str
+    is_retryable: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CollectionSkillPackageListItem(BaseModel):
+    id: uuid.UUID
+    collection_id: uuid.UUID
+    status: str
+    zip_path: str | None = None
+    version: int
+    pipeline_phase: str | None = None
+    failed_reason: str | None = None
+    is_retryable: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -342,6 +359,11 @@ class GenerateSkillRequest(BaseModel):
 class GenerateCollectionSkillRequest(BaseModel):
     user_goal: str | None = None
     reuse_extracted_kus: bool = True
+    detect_conflicts: bool = True
+
+
+class RetryCollectionSkillRequest(BaseModel):
+    user_goal: str | None = None
     detect_conflicts: bool = True
 
 

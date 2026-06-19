@@ -4,7 +4,14 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, BookOpen, Layers, Loader2 } from 'lucide-react'
-import { CollectionDetail, generateCollectionSkill, getCollection } from '@/lib/api'
+import {
+  CollectionDetail,
+  CollectionSkillRun,
+  generateCollectionSkill,
+  getCollection,
+  listCollectionSkills,
+  retryCollectionSkill,
+} from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
 
 export default function CollectionDetailPage() {
@@ -17,12 +24,24 @@ export default function CollectionDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [userGoal, setUserGoal] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [runs, setRuns] = useState<CollectionSkillRun[]>([])
+  const [retryingRunId, setRetryingRunId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!collectionId) return
-    getCollection(collectionId)
-      .then(setCollection)
-      .catch(() => setError(t('collections.loadFailed')))
+    Promise.allSettled([getCollection(collectionId), listCollectionSkills(collectionId)])
+      .then(results => {
+        const collectionResult = results[0]
+        const runsResult = results[1]
+        if (collectionResult.status === 'fulfilled') {
+          setCollection(collectionResult.value)
+        } else {
+          setError(t('collections.loadFailed'))
+        }
+        if (runsResult.status === 'fulfilled') {
+          setRuns(runsResult.value)
+        }
+      })
       .finally(() => setLoading(false))
   }, [collectionId, t])
 
@@ -41,6 +60,24 @@ export default function CollectionDetailPage() {
       const msg = e instanceof Error ? e.message : t('collections.generateFailed')
       setError(msg)
       setGenerating(false)
+    }
+  }
+
+  const handleRetry = async (run: CollectionSkillRun) => {
+    if (retryingRunId) return
+    setRetryingRunId(run.id)
+    setError(null)
+    try {
+      const skill = await retryCollectionSkill(run.id, {
+        user_goal: userGoal.trim() || null,
+        detect_conflicts: true,
+      })
+      router.push(`/collections/${collection?.id || collectionId}/skills/${skill.id}`)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('collections.generateFailed')
+      setError(msg)
+    } finally {
+      setRetryingRunId(null)
     }
   }
 
@@ -165,6 +202,73 @@ export default function CollectionDetailPage() {
                 </div>
               ))}
             </div>
+          </section>
+
+          <section style={{ marginTop: '40px' }}>
+            <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 500, marginBottom: '12px' }}>
+              {t('collections.runs')}
+            </h2>
+            {runs.length === 0 ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+                {t('collections.noRuns')}
+              </p>
+            ) : (
+              <div style={{ borderTop: '1px solid var(--border)' }}>
+                {runs.map(run => {
+                  const statusLabel =
+                    run.status === 'ready' ? t('collections.runReady') :
+                    run.status === 'generating' ? t('collections.runGenerating') :
+                    run.status === 'error' ? t('collections.runError') :
+                    t('collections.runUnknown')
+                  return (
+                    <div
+                      key={run.id}
+                      style={{
+                        borderBottom: '1px solid var(--border)',
+                        padding: '14px 0',
+                        display: 'grid',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: '12px',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                      }}>
+                        <div>
+                          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>{statusLabel}</div>
+                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            {new Date(run.created_at).toLocaleString()}
+                            {run.pipeline_phase ? ` · ${t('collections.phaseLabel')}: ${run.pipeline_phase}` : ''}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <Link className="btn-secondary" href={`/collections/${collection.id}/skills/${run.id}`}>
+                            {t('collections.viewRun')}
+                          </Link>
+                          {run.is_retryable && (
+                            <button
+                              className="btn-secondary"
+                              onClick={() => handleRetry(run)}
+                              disabled={retryingRunId === run.id}
+                            >
+                              {retryingRunId === run.id ? t('collections.generating') : t('collections.retryRun')}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {run.failed_reason && (
+                        <div style={{ color: 'var(--status-error)', fontSize: 'var(--text-xs)' }}>
+                          {t('collections.failureReason')}: {run.failed_reason}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </section>
         </>
       )}
