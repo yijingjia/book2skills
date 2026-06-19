@@ -156,7 +156,11 @@ class KUProcessor:
         results = [(int(label), group) for label, group in clusters_dict.items()]
         return results
 
-    async def process_and_cluster(self, kus: list[KnowledgeUnit]) -> list[tuple[int, list[KnowledgeUnit]]]:
+    async def process_and_cluster(
+        self,
+        kus: list[KnowledgeUnit],
+        deduplicate: bool = True,
+    ) -> list[tuple[int, list[KnowledgeUnit]]]:
         """主入口：向量化 -> 去重 -> 降维聚类"""
         if not kus:
             return []
@@ -181,8 +185,11 @@ class KUProcessor:
         logger.info("Fetching embeddings from LLM service...")
         embeddings = await self._get_embeddings(texts)
 
-        # 3. 去重
-        deduped_kus, deduped_embeddings = self.deduplicate_kus(kus, embeddings)
+        # 3. 去重（collection pipeline 传 deduplicate=False 以保留跨书来源信息）
+        if deduplicate:
+            deduped_kus, deduped_embeddings = self.deduplicate_kus(kus, embeddings)
+        else:
+            deduped_kus, deduped_embeddings = kus, embeddings
 
         # 4. 聚类
         clustered_groups = self.cluster_kus_hdbscan(deduped_kus, deduped_embeddings)

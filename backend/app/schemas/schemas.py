@@ -170,6 +170,11 @@ class KnowledgeUnit(BaseModel):
     example: str | None = Field(None, description="书中案例")
     when_to_use: list[str] = Field(default_factory=list, description="适用场景")
 
+    source_book_id: str | None = Field(None, description="来源书籍 ID，多书生成时使用")
+    source_book_title: str | None = Field(None, description="来源书名，多书生成时使用")
+    source_book_author: str | None = Field(None, description="来源作者，多书生成时使用")
+    source_books: list[dict[str, Any]] = Field(default_factory=list, description="跨书去重后的来源集合")
+
     @model_validator(mode="before")
     @classmethod
     def handle_aliases(cls, data: Any) -> Any:
@@ -332,6 +337,12 @@ class GenerateSkillRequest(BaseModel):
     focus_chapters: list[int] | None = None
     user_goal: str | None = None
     reuse_extracted_kus: bool = True
+
+
+class GenerateCollectionSkillRequest(BaseModel):
+    user_goal: str | None = None
+    reuse_extracted_kus: bool = True
+    detect_conflicts: bool = True
 
 
 # ─── Chat / Refine Schemas ───────────────────────────────────────────────────

@@ -23,7 +23,9 @@ class ClusterGenerator:
         await self.ku_processor.aclose()
 
     async def cluster_knowledge_units(
-        self, kus: list[KnowledgeUnit]
+        self,
+        kus: list[KnowledgeUnit],
+        deduplicate: bool = True,
     ) -> list[tuple[str, str, list[KnowledgeUnit]]]:
         """
         对已萃取出的 KUs 进行意图聚类。
@@ -39,7 +41,7 @@ class ClusterGenerator:
             return [("Core_Methodology", "通用核心方法论与法则", kus)]
 
         # 1. 数学运算：向量化 -> 去重 -> 降维 -> 聚类
-        clustered_groups = await self.ku_processor.process_and_cluster(kus)
+        clustered_groups = await self.ku_processor.process_and_cluster(kus, deduplicate=deduplicate)
 
         # 2. 对每个聚类簇，并发调用大模型提取 Theme Name 和 Summary
         sem = asyncio.Semaphore(5)

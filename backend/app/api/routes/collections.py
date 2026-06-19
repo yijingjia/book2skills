@@ -7,14 +7,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.models.models import Book, Collection, CollectionBook
+from app.models.models import Book, Collection, CollectionBook, CollectionSkillPackage
 from app.schemas.schemas import (
     CollectionBookSummary,
     CollectionCreateRequest,
     CollectionDetailResponse,
     CollectionListResponse,
+    CollectionSkillPackageResponse,
     CollectionUpdateRequest,
+    GenerateCollectionSkillRequest,
 )
+from app.tasks.generate_collection_skill import generate_collection_skill_task
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
@@ -136,6 +139,48 @@ async def create_collection(
 
     created = await _get_collection_or_404(collection.id, db)
     return _build_collection_detail_response(created)
+
+
+def _ensure_collection_generateable(collection: Collection) -> None:
+    memberships = collection.books or []
+    if len(memberships) < 2:
+        raise HTTPException(400, detail="综合 skill 至少两本书才能生成")
+    for membership in memberships:
+        if membership.book is None:
+            raise HTTPException(400, detail="书单包含无法读取的书籍")
+        if membership.book.status != "ready":
+            title = membership.book.title or str(membership.book_id)
+            raise HTTPException(400, detail=f"书籍尚未处理完成：{title} 当前状态：{membership.book.status}")
+
+
+@router.post("/{collection_id}/generate", response_model=CollectionSkillPackageResponse)
+async def generate_collection_skill(
+    collection_id: uuid.UUID,
+    request: GenerateCollectionSkillRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if not request.reuse_extracted_kus:
+        raise HTTPException(400, detail="当前版本只支持复用已提取 KU，请先保持 reuse_extracted_kus=true")
+
+    collection = await _get_collection_or_404(collection_id, db)
+    _ensure_collection_generateable(collection)
+
+    package = CollectionSkillPackage(
+        collection_id=collection_id,
+        status="generating",
+    )
+    db.add(package)
+    await db.commit()
+    await db.refresh(package)
+
+    generate_collection_skill_task.delay(
+        skill_package_id=str(package.id),
+        collection_id=str(collection_id),
+        user_goal=request.user_goal,
+        detect_conflicts=request.detect_conflicts,
+    )
+
+    return CollectionSkillPackageResponse.model_validate(package)
 
 
 @router.get("/{collection_id}", response_model=CollectionDetailResponse)

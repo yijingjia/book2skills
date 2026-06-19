@@ -17,6 +17,7 @@ celery_app = Celery(
     include=[
         "app.tasks.process_book",
         "app.tasks.generate_skill",
+        "app.tasks.generate_collection_skill",
     ],
 )
 
