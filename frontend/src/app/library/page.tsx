@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Plus, Loader2, BookOpen, AlertCircle, Inbox, Layers } from 'lucide-react'
-import { CollectionSummary, listBooks, generateSkill, listCollections } from '@/lib/api'
+import { Plus, Loader2, BookOpen, AlertCircle, Inbox, Layers, Trash2 } from 'lucide-react'
+import { CollectionSummary, listBooks, generateSkill, listCollections, deleteBook } from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
 
 type Book = {
@@ -26,6 +26,7 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [generatingFor, setGeneratingFor] = useState<string | null>(null)
+  const [deletingFor, setDeletingFor] = useState<string | null>(null)
   const recentCollections = collections.slice(0, 5)
 
   const handleRegenerate = async (bookId: string) => {
@@ -36,6 +37,26 @@ export default function LibraryPage() {
     } catch (e: any) {
       alert(e.message || t('library.error.regenerateFailed'))
       setGeneratingFor(null)
+    }
+  }
+
+  const handleDeleteBook = async (book: Book) => {
+    if (deletingFor) return
+    const title = book.title || t('common.unknownBookTitle')
+    if (!confirm(t('library.deleteBookConfirm', { title }))) return
+    setDeletingFor(book.book_id)
+    try {
+      await deleteBook(book.book_id)
+      setBooks(prev => prev.filter(item => item.book_id !== book.book_id))
+      try {
+        setCollections(await listCollections())
+      } catch {
+        setCollections([])
+      }
+    } catch (e: any) {
+      alert(e.message || t('library.error.deleteFailed'))
+    } finally {
+      setDeletingFor(null)
     }
   }
 
@@ -189,7 +210,9 @@ export default function LibraryPage() {
               book={book}
               isLast={i === books.length - 1}
               onRegenerate={handleRegenerate}
+              onDelete={handleDeleteBook}
               generating={generatingFor === book.book_id}
+              deleting={deletingFor === book.book_id}
               locale={locale}
             />
           ))}
@@ -263,12 +286,14 @@ function CollectionRow({
 }
 
 function BookRow({
-  book, isLast, onRegenerate, generating, locale,
+  book, isLast, onRegenerate, onDelete, generating, deleting, locale,
 }: {
   book: Book
   isLast: boolean
   onRegenerate: (id: string) => void
+  onDelete: (book: Book) => void
   generating: boolean
+  deleting: boolean
   locale: 'zh' | 'en'
 }) {
   const { t } = useI18n()
@@ -430,6 +455,20 @@ function BookRow({
             ) : t('library.retry')}
           </button>
         )}
+
+        <button
+          onClick={() => onDelete(book)}
+          disabled={deleting}
+          className="btn-ghost"
+          title={t('library.deleteBook')}
+          style={{ fontSize: '12px', color: 'var(--status-error)' }}
+        >
+          {deleting ? (
+            <Loader2 size={12} style={{ animation: 'spin 1.4s linear infinite' }} />
+          ) : (
+            <Trash2 size={12} />
+          )}
+        </button>
       </div>
     </div>
   )

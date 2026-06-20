@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, BookOpen, Layers, Loader2 } from 'lucide-react'
+import { ArrowLeft, BookOpen, Layers, Loader2, Trash2 } from 'lucide-react'
 import {
   CollectionDetail,
   CollectionSkillRun,
+  deleteCollection,
   generateCollectionSkill,
   getCollection,
   listCollectionSkills,
@@ -24,6 +25,7 @@ export default function CollectionDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [userGoal, setUserGoal] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [runs, setRuns] = useState<CollectionSkillRun[]>([])
   const [retryingRunId, setRetryingRunId] = useState<string | null>(null)
 
@@ -78,6 +80,21 @@ export default function CollectionDetailPage() {
       setError(msg)
     } finally {
       setRetryingRunId(null)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!collection || deleting) return
+    if (!confirm(t('collections.deleteConfirm', { name: collection.name }))) return
+    setDeleting(true)
+    setError(null)
+    try {
+      await deleteCollection(collection.id)
+      router.push('/library')
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('collections.deleteFailed')
+      setError(msg)
+      setDeleting(false)
     }
   }
 
@@ -159,6 +176,22 @@ export default function CollectionDetailPage() {
               <button className="btn-primary" disabled={generating} onClick={handleGenerate}>
                 {generating && <Loader2 size={14} style={{ animation: 'spin 1.4s linear infinite' }} />}
                 {generating ? t('collections.generating') : t('collections.generate')}
+              </button>
+              <button
+                className="btn-ghost"
+                disabled={deleting}
+                onClick={handleDelete}
+                style={{
+                  color: 'var(--status-error)',
+                  justifyContent: 'center',
+                }}
+              >
+                {deleting ? (
+                  <Loader2 size={14} style={{ animation: 'spin 1.4s linear infinite' }} />
+                ) : (
+                  <Trash2 size={14} />
+                )}
+                {deleting ? t('collections.deleting') : t('collections.delete')}
               </button>
             </div>
           </header>

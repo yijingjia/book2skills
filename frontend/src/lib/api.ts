@@ -101,6 +101,12 @@ export async function listBooks() {
   }>>(`/api/books`)
 }
 
+export async function deleteBook(bookId: string) {
+  return request<{ message: string }>(`/api/books/${bookId}`, {
+    method: 'DELETE',
+  })
+}
+
 // ─── Collections ─────────────────────────────────────────────────────────────
 
 export async function listCollections() {
