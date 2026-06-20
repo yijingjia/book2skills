@@ -8,6 +8,8 @@ from app.api.routes.collections import (
     _build_collection_book_memberships,
     _build_collection_detail_response,
     _build_collection_list_response,
+    _local_collection_storage_dir,
+    _safe_delete_collection_storage,
     _validate_ready_books,
 )
 from app.models.models import Book, Collection, CollectionBook
@@ -113,3 +115,20 @@ def test_build_collection_book_memberships_preserves_order():
     assert [membership.collection_id for membership in memberships] == [collection_id, collection_id]
     assert [membership.book_id for membership in memberships] == [first.id, second.id]
     assert [membership.order_index for membership in memberships] == [0, 1]
+
+
+def test_local_collection_storage_dir_uses_storage_root(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.api.routes.collections.settings.STORAGE_LOCAL_PATH", str(tmp_path))
+    collection_id = uuid.uuid4()
+
+    assert _local_collection_storage_dir(collection_id) == tmp_path / "collections" / str(collection_id)
+
+
+def test_safe_delete_collection_storage_removes_directory(tmp_path):
+    target = tmp_path / "collections" / "abc"
+    target.mkdir(parents=True)
+    (target / "skills.zip").write_text("zip", encoding="utf-8")
+
+    _safe_delete_collection_storage(target)
+
+    assert not target.exists()

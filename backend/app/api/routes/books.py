@@ -1,17 +1,20 @@
 """API 路由 — 书籍管理"""
 import hashlib
+import logging
 import shutil
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import desc, select
+from qdrant_client import QdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import Book
+from app.models.models import Book, Chapter, Collection, CollectionBook, CollectionSkillPackage, Conversation, Skill, SkillPackage
 from app.schemas.schemas import (
     BookDetailResponse,
     BookListResponse,
@@ -22,8 +25,133 @@ from app.schemas.schemas import (
 from app.tasks.process_book import process_book_task
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".pdf", ".epub"}
+
+
+def _ensure_book_deletable(book: Book) -> None:
+    if book.status in {"pending", "processing"}:
+        raise HTTPException(409, detail=f"书籍正在处理，当前状态：{book.status}，请处理结束后再删除")
+
+
+def _local_book_storage_dir(book_id: uuid.UUID) -> Path:
+    return Path(settings.STORAGE_LOCAL_PATH) / str(book_id)
+
+
+def _safe_delete_path(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _find_invalidated_collection_ids(
+    book_id: uuid.UUID,
+    collection_book_rows: list[dict],
+) -> set[uuid.UUID]:
+    counts: dict[uuid.UUID, int] = {}
+    containing: set[uuid.UUID] = set()
+    for row in collection_book_rows:
+        collection_id = row["collection_id"]
+        counts[collection_id] = counts.get(collection_id, 0) + 1
+        if row["book_id"] == book_id:
+            containing.add(collection_id)
+    return {
+        collection_id
+        for collection_id in containing
+        if counts.get(collection_id, 0) - 1 < 2
+    }
+
+
+def _best_effort_delete_book_storage(book_id: uuid.UUID) -> None:
+    try:
+        _safe_delete_path(_local_book_storage_dir(book_id))
+    except Exception as exc:
+        logger.warning("Failed to delete local storage for book %s: %s", book_id, exc)
+
+
+def _best_effort_delete_invalidated_collection_storage(collection_id: uuid.UUID) -> None:
+    try:
+        _safe_delete_path(Path(settings.STORAGE_LOCAL_PATH) / "collections" / str(collection_id))
+    except Exception as exc:
+        logger.warning("Failed to delete local storage for invalidated collection %s: %s", collection_id, exc)
+
+
+def _best_effort_delete_book_qdrant(book_id: uuid.UUID) -> None:
+    book_id_str = str(book_id)
+    try:
+        qdrant = QdrantClient(
+            url=settings.QDRANT_URL,
+            api_key=settings.QDRANT_API_KEY or None,
+        )
+        if qdrant.collection_exists(book_id_str):
+            qdrant.delete_collection(book_id_str)
+        if qdrant.collection_exists("skills_vectors"):
+            qdrant.delete(
+                collection_name="skills_vectors",
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="book_id",
+                            match=MatchValue(value=book_id_str),
+                        )
+                    ]
+                ),
+            )
+    except Exception as exc:
+        logger.warning("Failed to delete Qdrant data for book %s: %s", book_id, exc)
+
+
+def _book_graph_delete_statements(
+    book_id: uuid.UUID,
+    invalidated_collection_ids: set[uuid.UUID],
+) -> list:
+    invalidated_ids = list(invalidated_collection_ids)
+    statements = [
+        delete(Conversation).where(
+            Conversation.skill_package_id.in_(
+                select(SkillPackage.id).where(SkillPackage.book_id == book_id)
+            )
+        ),
+        delete(Skill).where(
+            (Skill.book_id == book_id)
+            | (
+                Skill.skill_package_id.in_(
+                    select(SkillPackage.id).where(SkillPackage.book_id == book_id)
+                )
+            )
+        ),
+        delete(SkillPackage).where(SkillPackage.book_id == book_id),
+        delete(Chapter).where(Chapter.book_id == book_id),
+    ]
+    if invalidated_collection_ids:
+        statements.extend(
+            [
+                delete(CollectionSkillPackage).where(
+                    CollectionSkillPackage.collection_id.in_(invalidated_ids)
+                ),
+                delete(CollectionBook).where(
+                    (CollectionBook.book_id == book_id)
+                    | (CollectionBook.collection_id.in_(invalidated_ids))
+                ),
+                delete(Collection).where(Collection.id.in_(invalidated_ids)),
+            ]
+        )
+    else:
+        statements.append(delete(CollectionBook).where(CollectionBook.book_id == book_id))
+    statements.append(delete(Book).where(Book.id == book_id))
+    return statements
+
+
+async def _load_collection_book_rows(db: AsyncSession) -> list[dict]:
+    result = await db.execute(select(CollectionBook.collection_id, CollectionBook.book_id))
+    return [
+        {"collection_id": row.collection_id, "book_id": row.book_id}
+        for row in result.all()
+    ]
 
 
 @router.get("", response_model=list[BookListResponse])
@@ -164,3 +292,24 @@ async def get_book_chapters(book_id: uuid.UUID, db: AsyncSession = Depends(get_d
             for c in sorted(book.chapters, key=lambda x: x.chapter_num)
         ],
     )
+
+
+@router.delete("/{book_id}")
+async def delete_book(book_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    book = await db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, detail="书籍不存在")
+
+    _ensure_book_deletable(book)
+    collection_rows = await _load_collection_book_rows(db)
+    invalidated_collection_ids = _find_invalidated_collection_ids(book_id, collection_rows)
+
+    for statement in _book_graph_delete_statements(book_id, invalidated_collection_ids):
+        await db.execute(statement)
+    await db.commit()
+
+    _best_effort_delete_book_storage(book_id)
+    for collection_id in invalidated_collection_ids:
+        _best_effort_delete_invalidated_collection_storage(collection_id)
+    _best_effort_delete_book_qdrant(book_id)
+    return {"message": "book deleted"}

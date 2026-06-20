@@ -1,12 +1,16 @@
 """API 路由 — Collection 书单管理"""
+import logging
+import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import Book, Collection, CollectionBook, CollectionSkillPackage
 from app.schemas.schemas import (
@@ -22,6 +26,7 @@ from app.schemas.schemas import (
 from app.tasks.generate_collection_skill import generate_collection_skill_task
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
+logger = logging.getLogger(__name__)
 STALE_GENERATING_AFTER = timedelta(minutes=30)
 
 
@@ -140,6 +145,22 @@ def _build_collection_book_memberships(
         )
         for index, book in enumerate(books)
     ]
+
+
+def _local_collection_storage_dir(collection_id: uuid.UUID) -> Path:
+    return Path(settings.STORAGE_LOCAL_PATH) / "collections" / str(collection_id)
+
+
+def _safe_delete_collection_storage(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def _best_effort_delete_collection_storage(collection_id: uuid.UUID) -> None:
+    try:
+        _safe_delete_collection_storage(_local_collection_storage_dir(collection_id))
+    except Exception as exc:
+        logger.warning("Failed to delete local storage for collection %s: %s", collection_id, exc)
 
 
 @router.get("", response_model=list[CollectionListResponse])
@@ -273,4 +294,5 @@ async def delete_collection(
     collection = await _get_collection_or_404(collection_id, db)
     await db.delete(collection)
     await db.commit()
+    _best_effort_delete_collection_storage(collection_id)
     return {"message": "collection deleted"}
