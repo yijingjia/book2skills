@@ -25,10 +25,7 @@ def _is_within_storage(path: Path) -> bool:
         return False
 
 
-def _clean_file_if_exists(file_path: str | None) -> None:
-    if not file_path:
-        return
-    path = Path(file_path)
+def _clean_path_if_exists(path: Path) -> None:
     if not _is_within_storage(path):
         print(f"Skip unsafe path outside storage root: {path}")
         return
@@ -43,6 +40,26 @@ def _clean_file_if_exists(file_path: str | None) -> None:
             print(f"Failed to delete local path {path}: {e}")
 
 
+def _book_storage_dir(book_id: str) -> Path:
+    return Path(settings.STORAGE_LOCAL_PATH) / book_id
+
+
+def _collection_storage_dir(collection_id: str) -> Path:
+    return Path(settings.STORAGE_LOCAL_PATH) / "collections" / collection_id
+
+
+def _find_invalidated_collection_ids(book_id: str, rows) -> set[str]:
+    counts: dict[str, int] = {}
+    containing: set[str] = set()
+    for row in rows:
+        collection_id = str(row.collection_id)
+        row_book_id = str(row.book_id)
+        counts[collection_id] = counts.get(collection_id, 0) + 1
+        if row_book_id == book_id:
+            containing.add(collection_id)
+    return {collection_id for collection_id in containing if counts.get(collection_id, 0) - 1 < 2}
+
+
 async def clean_all_data() -> None:
     engine = create_async_engine(str(settings.DATABASE_URL))
     async with engine.begin() as conn:
@@ -50,6 +67,9 @@ async def clean_all_data() -> None:
         await conn.execute(text("TRUNCATE TABLE conversations CASCADE;"))
         await conn.execute(text("TRUNCATE TABLE skills CASCADE;"))
         await conn.execute(text("TRUNCATE TABLE skill_packages CASCADE;"))
+        await conn.execute(text("TRUNCATE TABLE collection_skill_packages CASCADE;"))
+        await conn.execute(text("TRUNCATE TABLE collection_books CASCADE;"))
+        await conn.execute(text("TRUNCATE TABLE collections CASCADE;"))
         await conn.execute(text("TRUNCATE TABLE chapters CASCADE;"))
         await conn.execute(text("TRUNCATE TABLE books CASCADE;"))
         print("PostgreSQL tables truncated.")
@@ -88,7 +108,7 @@ async def clean_all_data() -> None:
 async def clean_single_book() -> None:
     engine = create_async_engine(str(settings.DATABASE_URL))
     book = None
-    skill_package_paths: list[str] = []
+    invalidated_collection_ids: set[str] = set()
 
     async with engine.begin() as conn:
         books_result = await conn.execute(
@@ -136,17 +156,14 @@ async def clean_single_book() -> None:
             await engine.dispose()
             return
 
-        skill_path_result = await conn.execute(
-            text(
-                """
-                SELECT zip_path
-                FROM skill_packages
-                WHERE book_id = :book_id
-                """
-            ),
-            {"book_id": str(book.id)},
+        collection_rows_result = await conn.execute(
+            text("SELECT collection_id, book_id FROM collection_books")
         )
-        skill_package_paths = [r.zip_path for r in skill_path_result.fetchall() if r.zip_path]
+        invalidated_collection_ids = _find_invalidated_collection_ids(str(book.id), collection_rows_result.fetchall())
+        if invalidated_collection_ids:
+            print("Collections that will also be deleted because they would have fewer than 2 books:")
+            for collection_id in sorted(invalidated_collection_ids):
+                print(f"- {collection_id}")
 
         await conn.execute(
             text(
@@ -179,6 +196,30 @@ async def clean_single_book() -> None:
             text("DELETE FROM chapters WHERE book_id = :book_id"),
             {"book_id": str(book.id)},
         )
+        if invalidated_collection_ids:
+            await conn.execute(
+                text("DELETE FROM collection_skill_packages WHERE collection_id = ANY(CAST(:collection_ids AS uuid[]))"),
+                {"collection_ids": list(invalidated_collection_ids)},
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM collection_books
+                    WHERE book_id = :book_id
+                       OR collection_id = ANY(CAST(:collection_ids AS uuid[]))
+                    """
+                ),
+                {"book_id": str(book.id), "collection_ids": list(invalidated_collection_ids)},
+            )
+            await conn.execute(
+                text("DELETE FROM collections WHERE id = ANY(CAST(:collection_ids AS uuid[]))"),
+                {"collection_ids": list(invalidated_collection_ids)},
+            )
+        else:
+            await conn.execute(
+                text("DELETE FROM collection_books WHERE book_id = :book_id"),
+                {"book_id": str(book.id)},
+            )
         await conn.execute(
             text("DELETE FROM books WHERE id = :book_id"),
             {"book_id": str(book.id)},
@@ -212,18 +253,87 @@ async def clean_single_book() -> None:
     except Exception as e:
         print(f"Qdrant cleanup skipped or failed: {e}")
 
-    _clean_file_if_exists(book.file_path)
-    for zip_path in skill_package_paths:
-        _clean_file_if_exists(zip_path)
+    _clean_path_if_exists(_book_storage_dir(str(book.id)))
+    for collection_id in invalidated_collection_ids:
+        _clean_path_if_exists(_collection_storage_dir(collection_id))
 
     print("\n✅ Selected book cleaned successfully.")
+
+
+async def clean_single_collection() -> None:
+    engine = create_async_engine(str(settings.DATABASE_URL))
+    collection = None
+
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                SELECT id, name, description, created_at
+                FROM collections
+                ORDER BY created_at DESC
+                """
+            )
+        )
+        collections = result.fetchall()
+
+        if not collections:
+            print("No collections found in database.")
+            await engine.dispose()
+            return
+
+        print("\nAvailable collections:")
+        for idx, row in enumerate(collections, start=1):
+            print(f"{idx}. {row.name} ({row.id})")
+
+        raw = input("\nSelect one collection to clean by number (or q to quit): ").strip().lower()
+        if raw in {"q", "quit", "exit"}:
+            print("Cancelled.")
+            await engine.dispose()
+            return
+        if not raw.isdigit():
+            print("Invalid selection. Please input a number.")
+            await engine.dispose()
+            return
+
+        selected_index = int(raw)
+        if selected_index < 1 or selected_index > len(collections):
+            print("Selection out of range.")
+            await engine.dispose()
+            return
+
+        collection = collections[selected_index - 1]
+        print(f"\nSelected: {collection.name} ({collection.id})")
+        if not _confirm("Continue cleaning this collection and its generated skill packages? Source books stay"):
+            print("Cancelled.")
+            await engine.dispose()
+            return
+
+        await conn.execute(
+            text("DELETE FROM collection_skill_packages WHERE collection_id = :collection_id"),
+            {"collection_id": str(collection.id)},
+        )
+        await conn.execute(
+            text("DELETE FROM collection_books WHERE collection_id = :collection_id"),
+            {"collection_id": str(collection.id)},
+        )
+        await conn.execute(
+            text("DELETE FROM collections WHERE id = :collection_id"),
+            {"collection_id": str(collection.id)},
+        )
+        print("PostgreSQL rows for selected collection deleted.")
+
+    await engine.dispose()
+
+    _clean_path_if_exists(_collection_storage_dir(str(collection.id)))
+    print("\n✅ Selected collection cleaned successfully.")
 
 
 async def main() -> None:
     print("Choose cleanup mode:")
     print("1. Clean ALL data (truncate all)")
     print("2. Clean ONE selected book")
-    mode = input("Input 1 or 2 (default 2): ").strip() or "2"
+    print("3. Clean ONE selected collection")
+    mode = input("Input 1, 2, or 3 (default 2): ").strip() or "2"
 
     if mode == "1":
         if not _confirm("This will delete ALL data. Continue"):
@@ -234,6 +344,10 @@ async def main() -> None:
 
     if mode == "2":
         await clean_single_book()
+        return
+
+    if mode == "3":
+        await clean_single_collection()
         return
 
     print("Unknown mode. Exit.")
