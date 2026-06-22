@@ -1,5 +1,6 @@
 """API 路由 — 书籍管理"""
 import hashlib
+import json
 import logging
 import shutil
 import uuid
@@ -16,6 +17,8 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import Book, Chapter, Collection, CollectionBook, CollectionSkillPackage, Conversation, Skill, SkillPackage
 from app.schemas.schemas import (
+    BookContentChapter,
+    BookContentResponse,
     BookDetailResponse,
     BookListResponse,
     BookStatusResponse,
@@ -37,6 +40,77 @@ def _ensure_book_deletable(book: Book) -> None:
 
 def _local_book_storage_dir(book_id: uuid.UUID) -> Path:
     return Path(settings.STORAGE_LOCAL_PATH) / str(book_id)
+
+
+def _references_dir(book_id: uuid.UUID) -> Path:
+    return _local_book_storage_dir(book_id) / "references"
+
+
+def _load_references_index(ref_dir: Path) -> dict:
+    index_path = ref_dir / "index.json"
+    if not index_path.exists():
+        raise HTTPException(404, detail="书籍 references/index.json 不存在")
+    try:
+        return json.loads(index_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(500, detail=f"书籍 references/index.json 无法解析：{exc}") from exc
+
+
+def _read_reference_chapter(ref_dir: Path, chapter: dict) -> str:
+    file_name = chapter.get("file")
+    if not file_name:
+        raise HTTPException(500, detail="章节缺少 references 文件名")
+    path = ref_dir / file_name
+    if not path.exists():
+        raise HTTPException(404, detail=f"章节正文不存在：{file_name}")
+    return path.read_text(encoding="utf-8")
+
+
+def _build_book_content_response(
+    book: Book,
+    ref_dir: Path,
+    mode: str,
+    chapter_num: int | None,
+) -> BookContentResponse:
+    if mode not in {"index", "chapter", "full"}:
+        raise HTTPException(400, detail="mode 必须是 index、chapter 或 full")
+
+    index = _load_references_index(ref_dir)
+    chapters = list(index.get("chapters") or [])
+    if mode == "chapter":
+        if chapter_num is None:
+            raise HTTPException(400, detail="chapter mode 需要 chapter_num")
+        chapters = [
+            chapter
+            for chapter in chapters
+            if chapter.get("chapter_num") == chapter_num
+        ]
+        if not chapters:
+            raise HTTPException(404, detail=f"章节不存在：{chapter_num}")
+
+    response_chapters = []
+    for chapter in chapters:
+        content = None
+        if mode in {"chapter", "full"}:
+            content = _read_reference_chapter(ref_dir, chapter)
+        response_chapters.append(
+            BookContentChapter(
+                chapter_num=chapter["chapter_num"],
+                title=chapter["title"],
+                page_start=chapter.get("page_start"),
+                page_end=chapter.get("page_end"),
+                file=chapter["file"],
+                char_count=chapter.get("char_count"),
+                content=content,
+            )
+        )
+
+    return BookContentResponse(
+        book_id=book.id,
+        title=book.title,
+        mode=mode,
+        chapters=response_chapters,
+    )
 
 
 def _safe_delete_path(path: Path) -> None:
@@ -291,6 +365,26 @@ async def get_book_chapters(book_id: uuid.UUID, db: AsyncSession = Depends(get_d
             )
             for c in sorted(book.chapters, key=lambda x: x.chapter_num)
         ],
+    )
+
+
+@router.get("/{book_id}/content", response_model=BookContentResponse)
+async def get_book_content(
+    book_id: uuid.UUID,
+    mode: str = "index",
+    chapter_num: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    book = await db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, detail="书籍不存在")
+    if book.status != "ready":
+        raise HTTPException(400, detail=f"书籍尚未处理完成，当前状态：{book.status}")
+    return _build_book_content_response(
+        book,
+        _references_dir(book_id),
+        mode=mode,
+        chapter_num=chapter_num,
     )
 
 
