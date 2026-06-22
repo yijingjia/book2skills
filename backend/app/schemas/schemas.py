@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -56,6 +56,23 @@ class BookDetailResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BookContentChapter(BaseModel):
+    chapter_num: int
+    title: str
+    page_start: int | None = None
+    page_end: int | None = None
+    file: str
+    char_count: int | None = None
+    content: str | None = None
+
+
+class BookContentResponse(BaseModel):
+    book_id: uuid.UUID
+    title: str | None
+    mode: Literal["index", "chapter", "full"]
+    chapters: list[BookContentChapter]
 
 
 # ─── Collection Schemas ─────────────────────────────────────────────────────
@@ -257,9 +274,16 @@ class SkillStep(BaseModel):
     step_num: int = Field(..., ge=1)
     action: str = Field(..., min_length=1, max_length=1000)
     detail: str | None = None
-    source_quote: str = Field(..., description="原文引用，防幻觉必填字段")
+    source_quote: str = Field(..., min_length=1, description="原文引用，防幻觉必填字段")
     source_chapter: str
     condition: str | None = None
+
+    @field_validator("source_quote")
+    @classmethod
+    def source_quote_must_not_be_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("source_quote 不能为空")
+        return v
 
 
 class ModularSkill(BaseModel):
@@ -282,6 +306,19 @@ class ModularSkill(BaseModel):
         if not isinstance(v, (list, tuple, set)):
             return [str(v)]
         return [str(item) for item in v]
+
+
+class AgentSkillMetadata(BaseModel):
+    generated_by: str = "agent"
+    agent_name: str | None = None
+
+
+class AgentSkillIngestRequest(BaseModel):
+    router_md: str = Field(..., min_length=1)
+    skills: list[ModularSkill] = Field(..., min_length=1)
+    scripts: dict[str, Any] = Field(default_factory=dict)
+    templates: dict[str, Any] | None = None
+    metadata: AgentSkillMetadata = Field(default_factory=AgentSkillMetadata)
 
 
 class MasterRouter(BaseModel):
