@@ -922,6 +922,36 @@ class TestSkillPacker:
             assert "templates/report.md" in names
             assert any(n.startswith("references/") for n in names)
 
+    def test_pack_serializes_structured_scripts_to_json(self, tmp_path):
+        import json
+        import zipfile
+
+        from app.pipeline.packer import SkillPacker
+
+        ref_dir = tmp_path / "test_book"
+        (ref_dir / "references").mkdir(parents=True)
+
+        packer = SkillPacker()
+        zip_path = tmp_path / "skills.zip"
+        _ = packer.pack(
+            skill_md="# Router\n\n---\n\n# Module",
+            references_dir=str(ref_dir),
+            scripts={
+                "metadata": {"generated_by": "agent", "vector_index_status": "indexed"},
+                "agent_ingest_report.json": {"status": "success", "generated_modules": 1},
+            },
+            templates=None,
+            output_path=str(zip_path),
+            book_title="测试书籍",
+        )
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            metadata = json.loads(zf.read("scripts/metadata").decode("utf-8"))
+            report = json.loads(zf.read("scripts/agent_ingest_report.json").decode("utf-8"))
+
+        assert metadata["generated_by"] == "agent"
+        assert report["generated_modules"] == 1
+
 
 # ─── Asset Generator 测试 ──────────────────────────────────────────────────
 

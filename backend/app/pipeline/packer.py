@@ -6,6 +6,12 @@ import zipfile
 from pathlib import Path
 
 
+def _zip_content(content):
+    if isinstance(content, (dict, list)):
+        return json.dumps(content, ensure_ascii=False, indent=2)
+    return content
+
+
 class SkillPacker:
     """将 SKILL.md、scripts/、references/、templates/ 打包为 skills.zip"""
 
@@ -59,10 +65,10 @@ class SkillPacker:
                         # 去掉 'skill_X_' 的前缀，作为干净的技能文件名
                         import re
                         clean_name = re.sub(r'^skill_\d+_', '', filename)
-                        zf.writestr(f"skills/{clean_name}", content)
+                        zf.writestr(f"skills/{clean_name}", _zip_content(content))
                         has_skills = True
                     else:
-                        zf.writestr(f"scripts/{filename}", content)
+                        zf.writestr(f"scripts/{filename}", _zip_content(content))
                         has_scripts = True
 
             if not has_skills:
@@ -81,7 +87,7 @@ class SkillPacker:
             # 4. templates/
             if templates:
                 for filename, content in templates.items():
-                    zf.writestr(f"templates/{filename}", content)
+                    zf.writestr(f"templates/{filename}", _zip_content(content))
             else:
                 zf.writestr(
                     "templates/README.md",

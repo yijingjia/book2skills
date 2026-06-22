@@ -15,8 +15,19 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import Book, Chapter, Collection, CollectionBook, CollectionSkillPackage, Conversation, Skill, SkillPackage
+from app.models.models import (
+    Book,
+    Chapter,
+    Collection,
+    CollectionBook,
+    CollectionSkillPackage,
+    Conversation,
+    Skill,
+    SkillPackage,
+)
+from app.pipeline.skill_persistence import persist_agent_skill_package
 from app.schemas.schemas import (
+    AgentSkillIngestRequest,
     BookContentChapter,
     BookContentResponse,
     BookDetailResponse,
@@ -24,6 +35,7 @@ from app.schemas.schemas import (
     BookStatusResponse,
     BookUploadResponse,
     ChapterResponse,
+    SkillPackageResponse,
 )
 from app.tasks.process_book import process_book_task
 
@@ -386,6 +398,29 @@ async def get_book_content(
         mode=mode,
         chapter_num=chapter_num,
     )
+
+
+@router.post("/{book_id}/skills", response_model=SkillPackageResponse)
+async def ingest_agent_skill(
+    book_id: uuid.UUID,
+    request: AgentSkillIngestRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    book = await db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, detail="书籍不存在")
+    if book.status != "ready":
+        raise HTTPException(400, detail=f"书籍尚未处理完成，当前状态：{book.status}")
+    skill_package = await persist_agent_skill_package(
+        db=db,
+        book_id=book_id,
+        router_md=request.router_md,
+        skills=request.skills,
+        scripts=request.scripts,
+        templates=request.templates,
+        metadata=request.metadata,
+    )
+    return SkillPackageResponse.model_validate(skill_package)
 
 
 @router.delete("/{book_id}")
