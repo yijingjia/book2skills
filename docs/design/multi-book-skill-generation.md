@@ -376,6 +376,8 @@ SourceBackedKnowledgeUnit
 - 判定为 same 的 KU 不互相覆盖，而是形成归一化 group 和显式关系。
 - skill 生成可以读取折叠后的 view，但这个 view 是派生产物，不是唯一事实来源。
 
+当前已落地的第一步只生成 embedding similarity 候选和非销毁式折叠视图；LLM / agent judge 的确认、拆分和 review flag 进入后续 claim/identity 阶段。
+
 新增或调整工件：
 
 ```text
@@ -752,7 +754,7 @@ export function getCollectionSkillDownloadUrl(skillId: string)
 
 - 新增 `generate_collection_skill_task`。
 - 新增 `CollectionKUProvider`。
-- 优先从每本书已有的 `extracted_kus.json` 或 `extracted_kus_partial.json` 读取 KU。
+- 从 `book_knowledge_units` 读取每本书的权威 KU；`scripts/extracted_kus.json` 只作为审查/打包快照。
 - 给 KU 附加 `book_id`、`book_title`、`author`、`chapter_num`、`source_chunk_id` 等 source metadata。
 - 新增 `CrossBookNormalizer`。
 - 保存中间产物：
@@ -1194,20 +1196,19 @@ created_in_run_id
 3. 新增 collection skill package shell、pack/download。
 4. 新增 `generate_collection_skill_task`，从 `book_knowledge_units` 读取书级 KU。
 5. 已将单书 LLM 路径和 agent 路径产出的 KU 统一写入 `book_knowledge_units`，collection 不再依赖“最新 skill package 是否带 `extracted_kus.json`”。
-6. 已实现基础跨书 KU 去重、聚类、共识和候选分歧；其中当前 KU 去重仍是销毁式 `semantic_deduplicate_kus`，不是本文档目标的 link-and-keep 归一化。
+6. 已实现非销毁式跨书 KU 归一化第一步：原始 KU 保留在 `source_kus.json`，embedding 相似候选关系记录在 `same_as_edges.json`，下游使用派生的 `deduped_view.json`。
 7. agent skill package 会在 `scripts/extracted_kus.json` 中导出一份 KU 快照，便于审查；该快照不是 collection / KG 的 source of truth。
 8. 新增 collection 创建页、详情页、生成入口、preview 页。
 9. 增加运行历史、失败原因、stale/error retry。
 
 下一阶段：
 
-10. 重构 Plan 3 的跨书 KU 处理：用 `CrossBookNormalizer` 替换销毁式 `semantic_deduplicate_kus`，落地 `source_kus.json`、`normalized_ku_groups.json`、`same_as_edges.json` 和 `deduped_view.json`。
-11. 执行 R-Phase 5：由后端 collection pipeline 产出观点级知识建模、claim 对齐、关系判断和适用边界。
-12. 建立 collection-level identity store，持久化稳定 `claim_key`、KU/claim identity edge 和 review flags。
-13. 执行 R-Phase 6：把边界和决策规则织入 modular skill。
-14. 执行 R-Phase 7：collection skill chat/playground/refine。
-15. 执行 R-Phase 8：从稳定观点关系派生知识图谱。
-16. 执行 R-Phase 9：增量更新、版本管理和知识资产导出。
+10. 执行 R-Phase 5：由后端 collection pipeline 产出观点级知识建模、claim 对齐、关系判断和适用边界。
+11. 建立 collection-level identity store，持久化稳定 `claim_key`、KU/claim identity edge 和 review flags。
+12. 执行 R-Phase 6：把边界和决策规则织入 modular skill。
+13. 执行 R-Phase 7：collection skill chat/playground/refine。
+14. 执行 R-Phase 8：从稳定观点关系派生知识图谱。
+15. 执行 R-Phase 9：增量更新、版本管理和知识资产导出。
 
 尚未实现的知识图谱范围：
 
