@@ -146,3 +146,42 @@ async def test_ku_same_as_judge_batches_calls_and_merges_results():
         j3 = next(j for j in result["judgments"] if j["candidate_id"] == "c3")
         assert j3["decision"] == "alias_of"
         assert j3["confidence"] == 0.85
+
+
+def test_signatures_support_positional_arguments():
+    # 1. normalize_judge_response should support positional decided_by
+    candidates = {"pairs": []}
+    res = normalize_judge_response({}, candidates, "some_decider")
+    assert res == {"judgments": []}
+
+    # 2. KUSameAsJudge.__init__ should support positional batch_size
+    from app.pipeline.ku_same_as_judge import KUSameAsJudge
+    judge = KUSameAsJudge(25)
+    assert judge.batch_size == 25
+
+    # 3. KUSameAsJudge.judge should support positional source_kus and candidates
+    # (Just verifying it can be invoked this way; we can mock or pass minimal inputs)
+    from unittest.mock import AsyncMock, patch
+    with patch("app.pipeline.ku_same_as_judge.get_llm_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        judge = KUSameAsJudge(25)
+        # We should be able to call judge.judge(source_kus, candidates) positionally
+        # We will mock _judge_batch to avoid deep client calls
+        judge._judge_batch = AsyncMock(return_value={"judgments": []})
+        
+        import asyncio
+        asyncio.run(judge.judge({"knowledge_units": []}, {"pairs": []}))
+
+
+def test_extract_judgment_items_prioritizes_data_over_other_keys():
+    raw = {
+        "other_key": ["not", "dictionaries"],
+        "data": [{"candidate_id": "c1", "decision": "same_as"}],
+    }
+    # If other_key is processed first by iterating values, it would return [],
+    # but since data is checked explicitly first, it should return the item in data.
+    res = extract_judgment_items(raw)
+    assert len(res) == 1
+    assert res[0]["candidate_id"] == "c1"
+

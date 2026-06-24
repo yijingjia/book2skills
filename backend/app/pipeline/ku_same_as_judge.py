@@ -22,6 +22,8 @@ def extract_judgment_items(raw: Any) -> list[dict[str, Any]]:
         return []
     if isinstance(raw.get("judgments"), list):
         return [item for item in raw["judgments"] if isinstance(item, dict)]
+    if isinstance(raw.get("data"), list):
+        return [item for item in raw["data"] if isinstance(item, dict)]
     for value in raw.values():
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
@@ -31,7 +33,6 @@ def extract_judgment_items(raw: Any) -> list[dict[str, Any]]:
 def normalize_judge_response(
     raw: Any,
     candidates: dict[str, list[dict[str, Any]]],
-    *,
     decided_by: str,
 ) -> dict[str, list[dict[str, Any]]]:
     candidate_by_id = {
@@ -110,13 +111,12 @@ def _batch_prompt(source_kus: dict[str, Any], pairs: list[dict[str, Any]]) -> st
 
 
 class KUSameAsJudge:
-    def __init__(self, *, batch_size: int = 30):
+    def __init__(self, batch_size: int = 30):
         self.batch_size = batch_size
         self.client = get_llm_client()
 
     async def judge(
         self,
-        *,
         source_kus: dict[str, Any],
         candidates: dict[str, list[dict[str, Any]]],
     ) -> dict[str, list[dict[str, Any]]]:
