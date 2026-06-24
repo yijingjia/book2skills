@@ -1,4 +1,7 @@
-from app.pipeline.collection_synthesis import build_candidate_tension_artifacts, build_consensus_artifacts
+from app.pipeline.collection_synthesis import (
+    build_candidate_tension_artifacts,
+    build_consensus_artifacts,
+)
 from app.schemas.schemas import KnowledgeUnit
 
 

@@ -7,15 +7,19 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.config import settings
-from app.core.database import get_db
-from app.models.models import CollectionSkillPackage
-from app.pipeline.packer import SkillPacker
-from app.schemas.schemas import CollectionSkillPackageResponse, PackResponse, RetryCollectionSkillRequest
 from app.api.routes.collections import (
     _ensure_collection_generateable,
     _get_collection_or_404,
     _is_retryable_collection_skill,
+)
+from app.core.config import settings
+from app.core.database import get_db
+from app.models.models import CollectionSkillPackage
+from app.pipeline.packer import SkillPacker
+from app.schemas.schemas import (
+    CollectionSkillPackageResponse,
+    PackResponse,
+    RetryCollectionSkillRequest,
 )
 from app.tasks.generate_collection_skill import generate_collection_skill_task
 

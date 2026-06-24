@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.sql.dml import Delete
 
 from app.api.routes.books import (
     _book_graph_delete_statements,
@@ -11,7 +12,6 @@ from app.api.routes.books import (
     _safe_delete_path,
 )
 from app.models.models import Book
-from sqlalchemy.sql.dml import Delete
 
 
 def make_book(status: str = "ready") -> Book:
