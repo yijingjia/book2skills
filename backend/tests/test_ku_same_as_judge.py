@@ -148,7 +148,8 @@ async def test_ku_same_as_judge_batches_calls_and_merges_results():
         assert j3["confidence"] == 0.85
 
 
-def test_signatures_support_positional_arguments():
+@pytest.mark.asyncio
+async def test_signatures_support_positional_arguments():
     # 1. normalize_judge_response should support positional decided_by
     candidates = {"pairs": []}
     res = normalize_judge_response({}, candidates, "some_decider")
@@ -170,8 +171,7 @@ def test_signatures_support_positional_arguments():
         # We will mock _judge_batch to avoid deep client calls
         judge._judge_batch = AsyncMock(return_value={"judgments": []})
         
-        import asyncio
-        asyncio.run(judge.judge({"knowledge_units": []}, {"pairs": []}))
+        await judge.judge({"knowledge_units": []}, {"pairs": []})
 
 
 def test_extract_judgment_items_prioritizes_data_over_other_keys():
@@ -184,4 +184,28 @@ def test_extract_judgment_items_prioritizes_data_over_other_keys():
     res = extract_judgment_items(raw)
     assert len(res) == 1
     assert res[0]["candidate_id"] == "c1"
+
+
+def test_extract_judgment_items_accumulates_all_lists():
+    raw = {
+        "list1": [{"candidate_id": "c1", "decision": "same_as"}],
+        "list2": [{"candidate_id": "c2", "decision": "not_same"}],
+        "non_list": "val",
+    }
+    res = extract_judgment_items(raw)
+    assert len(res) == 2
+    assert {item["candidate_id"] for item in res} == {"c1", "c2"}
+
+
+@pytest.mark.asyncio
+async def test_ku_same_as_judge_aclose():
+    from unittest.mock import patch, AsyncMock
+    from app.pipeline.ku_same_as_judge import KUSameAsJudge
+    
+    with patch("app.pipeline.ku_same_as_judge.get_llm_client") as mock_get_client, \
+         patch("app.pipeline.ku_same_as_judge.close_llm_client", new_callable=AsyncMock) as mock_close:
+        
+        judge = KUSameAsJudge()
+        await judge.aclose()
+        mock_close.assert_called_once_with(judge.client)
 

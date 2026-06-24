@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from typing import Any
 
-from app.core.llm import get_chat_model, get_llm_client
+from app.core.llm import close_llm_client, get_chat_model, get_llm_client
+from app.core.retry import llm_retry
+
+logger = logging.getLogger(__name__)
 
 VALID_DECISIONS = {
     "same_as",
@@ -24,10 +29,11 @@ def extract_judgment_items(raw: Any) -> list[dict[str, Any]]:
         return [item for item in raw["judgments"] if isinstance(item, dict)]
     if isinstance(raw.get("data"), list):
         return [item for item in raw["data"] if isinstance(item, dict)]
+    items = []
     for value in raw.values():
         if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
+            items.extend([item for item in value if isinstance(item, dict)])
+    return items
 
 
 def normalize_judge_response(
@@ -115,36 +121,58 @@ class KUSameAsJudge:
         self.batch_size = batch_size
         self.client = get_llm_client()
 
+    async def aclose(self) -> None:
+        await close_llm_client(self.client)
+
     async def judge(
         self,
         source_kus: dict[str, Any],
         candidates: dict[str, list[dict[str, Any]]],
     ) -> dict[str, list[dict[str, Any]]]:
-        all_judgments = []
         pairs = candidates.get("pairs", [])
+        logger.info(f"Starting LLM judgment for {len(pairs)} pairs with batch size {self.batch_size}")
+        tasks = []
         for index in range(0, len(pairs), self.batch_size):
             batch = pairs[index : index + self.batch_size]
-            raw = await self._judge_batch(source_kus, {"pairs": batch})
-            all_judgments.extend(raw["judgments"])
+            tasks.append(self._judge_batch(source_kus, {"pairs": batch}))
+        
+        results = await asyncio.gather(*tasks)
+        all_judgments = []
+        for res in results:
+            all_judgments.extend(res["judgments"])
+        
+        logger.info(f"Completed judgment for {len(pairs)} pairs, generated {len(all_judgments)} judgments")
         return {"judgments": all_judgments}
 
+    @llm_retry
     async def _judge_batch(
         self,
         source_kus: dict[str, Any],
         candidates: dict[str, list[dict[str, Any]]],
     ) -> dict[str, list[dict[str, Any]]]:
+        pairs = candidates.get("pairs", [])
+        logger.info(f"Judging batch with {len(pairs)} pairs")
+        
+        system_prompt = (
+            "你是一个跨书籍知识单元（KU）归一化评审器。判断每对 KU 是否表达同一个或相关的方法、原则或步骤。\n"
+            "只输出 JSON 格式的对象，不要包含任何额外的描述或 Markdown 标记。格式如下：\n"
+            "{\n"
+            "  \"judgments\": [\n"
+            "    {\n"
+            "      \"candidate_id\": \"候选对 ID（字符串类型）\",\n"
+            "      \"decision\": \"必须是以下五个枚举值之一：'same_as'、'alias_of'、'related_but_distinct'、'contextual_overlap'、'not_same'\",\n"
+            "      \"confidence\": \"置信度，介于 0.0 到 1.0 之间的浮点数\",\n"
+            "      \"evidence\": \"为什么给出该决策的理由或证据\"\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+        
         response = await self.client.chat.completions.create(
             model=get_chat_model(),
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是跨书知识归一化评审器。判断每对 KU 是否表达同一个方法、原则 or 步骤。"
-                        "只输出 JSON，格式为 {\"judgments\": [...]}. "
-                        "decision 只能 be same_as, alias_of, related_but_distinct, contextual_overlap, not_same。"
-                    ),
-                },
-                {"role": "user", "content": _batch_prompt(source_kus, candidates.get("pairs", []))},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": _batch_prompt(source_kus, pairs)},
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
@@ -152,6 +180,7 @@ class KUSameAsJudge:
         content = response.choices[0].message.content or "{}"
         try:
             raw = json.loads(content)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM response as JSON: {content}. Error: {e}")
             raw = {}
         return normalize_judge_response(raw, candidates, decided_by="backend_llm")
