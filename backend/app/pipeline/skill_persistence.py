@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.llm import close_embedding_client, get_embedding_client
 from app.models.models import Skill, SkillPackage
+from app.pipeline.book_knowledge_unit_store import load_book_knowledge_unit_rows
 from app.schemas.schemas import AgentSkillMetadata, ModularSkill
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,31 @@ def build_agent_skill_scripts(
     for index, skill in enumerate(skills):
         scripts[f"skill_{index}_{_safe_name(skill.name)}.md"] = render_modular_skill_markdown(skill)
     return scripts
+
+
+async def build_extracted_kus_export(db: AsyncSession, book_id: uuid.UUID) -> dict:
+    rows = await load_book_knowledge_unit_rows(db, book_id)
+    knowledge_units = [
+        {
+            "id": str(row.id),
+            "book_id": str(row.book_id),
+            "skill_package_id": str(row.skill_package_id) if row.skill_package_id else None,
+            "source_chunk_id": row.source_chunk_id,
+            "source_chapter_num": row.source_chapter_num,
+            "source_quote": row.source_quote,
+            "content": row.content or {},
+            "tags": row.tags or [],
+            "generated_by": row.generated_by,
+            "generator_name": row.generator_name,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+    return {
+        "book_id": str(book_id),
+        "knowledge_units_count": len(knowledge_units),
+        "knowledge_units": knowledge_units,
+    }
 
 
 def build_skill_embedding_text(skill: ModularSkill) -> str:
@@ -174,6 +200,7 @@ async def persist_agent_skill_package(
         await close_embedding_client(embedder)
 
     base_scripts = build_agent_skill_scripts(router_md, skills, scripts, metadata)
+    base_scripts["extracted_kus.json"] = await build_extracted_kus_export(db, book_id)
     skill_package = SkillPackage(
         book_id=book_id,
         skill_md=build_agent_skill_markdown(router_md, skills),

@@ -44,6 +44,21 @@ class FakeEmbedder:
         return [[0.1, 0.2, 0.3] for _ in texts]
 
 
+class FakeKnowledgeUnitRow:
+    def __init__(self, book_id: uuid.UUID):
+        self.id = uuid.uuid4()
+        self.book_id = book_id
+        self.skill_package_id = None
+        self.source_chunk_id = f"{book_id}_ch1_agent_0001"
+        self.source_chapter_num = 1
+        self.source_quote = "先确认问题是否真实存在。"
+        self.content = {"principle": "先验证问题真实性"}
+        self.tags = ["问题验证"]
+        self.generated_by = "agent"
+        self.generator_name = "codex"
+        self.created_at = None
+
+
 class FakeKUCheckSession:
     def __init__(self, has_ku: bool):
         self.has_ku = has_ku
@@ -177,16 +192,21 @@ def test_with_vector_index_status_records_success_and_error():
 
 async def test_persist_agent_skill_package_marks_indexed_on_success():
     db = FakeAsyncSession()
+    book_id = uuid.uuid4()
 
     with (
         patch("app.pipeline.skill_persistence.get_embedding_client", return_value=FakeEmbedder()),
         patch("app.pipeline.skill_persistence.close_embedding_client", new=AsyncMock()),
         patch("app.pipeline.skill_persistence.QdrantClient"),
         patch("app.pipeline.skill_persistence._upsert_skill_vectors", new=AsyncMock()) as upsert,
+        patch(
+            "app.pipeline.skill_persistence.load_book_knowledge_unit_rows",
+            new=AsyncMock(return_value=[FakeKnowledgeUnitRow(book_id)]),
+        ) as load_kus,
     ):
         package = await persist_agent_skill_package(
             db=db,
-            book_id=uuid.uuid4(),
+            book_id=book_id,
             router_md="# Router",
             skills=[make_skill()],
             scripts={},
@@ -196,9 +216,12 @@ async def test_persist_agent_skill_package_marks_indexed_on_success():
 
     assert package.status == "ready"
     assert package.scripts["metadata"]["vector_index_status"] == "indexed"
+    assert package.scripts["extracted_kus.json"]["knowledge_units_count"] == 1
+    assert package.scripts["extracted_kus.json"]["knowledge_units"][0]["source_quote"] == "先确认问题是否真实存在。"
     assert len(db.added) == 2
     assert db.commit.await_count == 2
     upsert.assert_awaited_once()
+    load_kus.assert_awaited_once_with(db, book_id)
     db.rollback.assert_not_awaited()
 
 
@@ -209,6 +232,10 @@ async def test_persist_agent_skill_package_keeps_package_when_qdrant_fails():
         patch("app.pipeline.skill_persistence.get_embedding_client", return_value=FakeEmbedder()),
         patch("app.pipeline.skill_persistence.close_embedding_client", new=AsyncMock()),
         patch("app.pipeline.skill_persistence.QdrantClient"),
+        patch(
+            "app.pipeline.skill_persistence.load_book_knowledge_unit_rows",
+            new=AsyncMock(return_value=[]),
+        ),
         patch(
             "app.pipeline.skill_persistence._upsert_skill_vectors",
             new=AsyncMock(side_effect=RuntimeError("qdrant down")),
@@ -239,6 +266,10 @@ async def test_persist_agent_skill_package_rolls_back_on_db_error():
         patch("app.pipeline.skill_persistence.get_embedding_client", return_value=FakeEmbedder()),
         patch("app.pipeline.skill_persistence.close_embedding_client", new=AsyncMock()),
         patch("app.pipeline.skill_persistence.QdrantClient"),
+        patch(
+            "app.pipeline.skill_persistence.load_book_knowledge_unit_rows",
+            new=AsyncMock(return_value=[]),
+        ),
         patch("app.pipeline.skill_persistence._upsert_skill_vectors", new=AsyncMock()) as upsert,
     ):
         try:
