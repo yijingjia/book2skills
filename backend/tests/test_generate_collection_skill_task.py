@@ -17,10 +17,10 @@ def test_render_collection_skill_report_includes_sources():
 def test_checkpoint_scripts_preserves_existing_scripts_and_phase():
     scripts = _checkpoint_scripts(
         existing={"previous.json": "{}"},
-        phase="deduped_kus_ready",
-        artifacts={"deduped_kus.json": "[1]"},
+        phase="normalized_kus_ready",
+        artifacts={"deduped_view.json": "[1]"},
     )
 
     assert scripts["previous.json"] == "{}"
-    assert scripts["deduped_kus.json"] == "[1]"
-    assert scripts["pipeline_phase"] == "deduped_kus_ready"
+    assert scripts["deduped_view.json"] == "[1]"
+    assert scripts["pipeline_phase"] == "normalized_kus_ready"

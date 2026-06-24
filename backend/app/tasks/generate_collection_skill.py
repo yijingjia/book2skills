@@ -110,11 +110,11 @@ async def _generate_collection_skill_async(
     from app.models.models import CollectionSkillPackage
     from app.pipeline.cluster_generator import ClusterGenerator
     from app.pipeline.collection_ku_loader import load_book_kus, load_collection_with_books
-    from app.pipeline.collection_ku_processor import semantic_deduplicate_kus
     from app.pipeline.collection_synthesis import (
         build_candidate_tension_artifacts,
         build_consensus_artifacts,
     )
+    from app.pipeline.cross_book_normalizer import normalize_cross_book_kus
     from app.pipeline.router_generator import RouterGenerator
     from app.pipeline.skill_generator import SkillGenerator
     from app.schemas.schemas import ModularSkill
@@ -177,17 +177,23 @@ async def _generate_collection_skill_async(
             )
             await db.commit()
 
-            # Step 7: semantic dedup
-            current_phase = "deduplicating"
+            # Step 7: non-destructive normalization
+            current_phase = "normalizing_kus"
             embedder = get_embedding_client()
-            deduped_kus = await semantic_deduplicate_kus(all_source_kus, embedder, threshold=0.9)
+            normalization = await normalize_cross_book_kus(all_source_kus, embedder, threshold=0.9)
+            deduped_kus = normalization.deduped_view_kus
 
-            # Step 8: checkpoint deduped_kus_ready
-            current_phase = "deduped_kus_ready"
+            # Step 8: checkpoint normalized_kus_ready
+            current_phase = "normalized_kus_ready"
             package.scripts = _checkpoint_scripts(
                 package.scripts,
-                "deduped_kus_ready",
-                {"deduped_kus.json": _json([ku.model_dump() for ku in deduped_kus])},
+                "normalized_kus_ready",
+                {
+                    "ku_similarity_candidates.json": _json(normalization.similarity_candidates),
+                    "normalized_ku_groups.json": _json(normalization.normalized_ku_groups),
+                    "same_as_edges.json": _json(normalization.same_as_edges),
+                    "deduped_view.json": _json(normalization.deduped_view),
+                },
             )
             await db.commit()
 
