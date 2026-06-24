@@ -69,3 +69,42 @@ The backend is the source of truth for schemas. Do not hardcode KU or skill payl
 - Do not skip KU ingestion. Agent skill ingest requires existing book-level KUs.
 - If content cannot be read, stop and report the failing tool and book id.
 - If references/storage appear missing, stop and report the error instead of producing an uncited skill.
+
+## Multi-book Collection Workflow
+
+Use this path when the user asks to generate one comprehensive skill from multiple books.
+
+Rules:
+
+- Do not synthesize the collection skill manually.
+- Use Book2Skills backend generation through MCP.
+- Ensure every selected book is ready and has submitted knowledge units.
+- If a book lacks KU, run the single-book workflow first for that book.
+- After generation, pack and download the collection skill.
+- Inspect `scripts/` for normalization artifacts and report quality signals.
+
+Steps:
+
+1. Call `book2skills_list_books`.
+2. Match requested titles to existing ready books.
+3. If any book is missing or not ready, upload/wait or ask the user for confirmation before proceeding.
+4. Call `book2skills_create_collection` with the selected book ids.
+5. Call `book2skills_generate_collection_skill` with `wait=true`.
+6. If generation fails and the run is retryable, call `book2skills_retry_collection_skill` and then wait on the new run.
+7. Call `book2skills_pack_collection_skill`.
+8. Call `book2skills_download_collection_skill` to a user-accessible absolute path.
+9. Inspect the downloaded package scripts:
+   - `source_kus.json`
+   - `ku_similarity_candidates.json`
+   - `normalized_ku_groups.json`
+   - `same_as_edges.json`
+   - `deduped_view.json`
+10. Report:
+    - collection id
+    - run id
+    - downloaded zip path
+    - source KU count
+    - same_as edge count
+    - generated module count
+
+If `same_as_edges.json` has zero edges, state that generation succeeded but cross-book same_as blocking found no candidates at the current threshold.

@@ -362,3 +362,37 @@ Backend API base URL wrong:
 ```bash
 export BOOK2SKILLS_API_BASE_URL=http://localhost:8000
 ```
+
+## Collection Skill Generation Through MCP
+
+Collection generation remains server-side. Agent clients only orchestrate the existing Book2Skills APIs.
+
+MCP workflow:
+
+1. Use `book2skills_list_books` to find ready books.
+2. Use `book2skills_create_collection` with two or more `book_ids`.
+3. Use `book2skills_generate_collection_skill` with `wait=true`.
+4. If the run enters `error` or is stale-generating, use `book2skills_retry_collection_skill` to create a fresh backend run.
+5. Use `book2skills_pack_collection_skill` once the run is ready.
+6. Use `book2skills_download_collection_skill` to save the zip locally.
+7. Inspect the unpacked `scripts/` directory for:
+   - `source_kus.json`
+   - `ku_similarity_candidates.json`
+   - `normalized_ku_groups.json`
+   - `same_as_edges.json`
+   - `deduped_view.json`
+
+The agent must not generate collection skill content itself in this workflow. It can inspect artifacts and report quality signals, such as zero `same_as_edges` or overly broad themes.
+
+CLI equivalent:
+
+```bash
+cd backend
+uv run python -m app.agent_client.cli list-books
+uv run python -m app.agent_client.cli create-collection --name "认知合集" BOOK_ID_A BOOK_ID_B
+uv run python -m app.agent_client.cli generate-collection COLLECTION_ID --goal "提炼跨书方法论" --wait
+uv run python -m app.agent_client.cli pack-collection-skill RUN_ID
+uv run python -m app.agent_client.cli download-collection-skill RUN_ID /absolute/path/skills.zip
+# Optional retry:
+uv run python -m app.agent_client.cli retry-collection-skill RUN_ID --goal "换个目标"
+```
