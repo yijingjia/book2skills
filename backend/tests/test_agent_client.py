@@ -163,3 +163,114 @@ def test_http_error_includes_status_endpoint_and_body():
     assert "400" in message
     assert "/api/books" in message
     assert "bad request" in message
+
+
+def test_collection_client_methods_call_existing_api_routes():
+    import json
+
+    import httpx
+
+    from app.agent_client.client import Book2SkillsAgentClient
+    from app.agent_client.types import AgentClientConfig
+
+    seen: list[tuple[str, str, dict | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8")) if request.content else None
+        seen.append((request.method, request.url.path, body))
+        if request.method == "GET" and request.url.path == "/api/collections":
+            return httpx.Response(200, json=[{"id": "collection-1", "name": "产品书单"}])
+        if request.method == "POST" and request.url.path == "/api/collections":
+            return httpx.Response(200, json={"id": "collection-1", "name": body["name"], "books": []})
+        if request.method == "GET" and request.url.path == "/api/collections/collection-1":
+            return httpx.Response(200, json={"id": "collection-1", "name": "产品书单", "books": []})
+        if request.method == "POST" and request.url.path == "/api/collections/collection-1/generate":
+            return httpx.Response(200, json={"id": "run-1", "collection_id": "collection-1", "status": "generating"})
+        if request.method == "GET" and request.url.path == "/api/collections/collection-1/skills":
+            return httpx.Response(200, json=[{"id": "run-1", "collection_id": "collection-1", "status": "ready"}])
+        if request.method == "GET" and request.url.path == "/api/collection-skills/run-1":
+            return httpx.Response(200, json={"id": "run-1", "collection_id": "collection-1", "status": "ready"})
+        if request.method == "POST" and request.url.path == "/api/collection-skills/run-1/pack":
+            return httpx.Response(200, json={"skill_package_id": "run-1", "zip_path": "/tmp/skills.zip"})
+        if request.method == "POST" and request.url.path == "/api/collection-skills/run-1/retry":
+            return httpx.Response(200, json={"id": "run-2", "collection_id": "collection-1", "status": "generating"})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url.path}")
+
+    client = Book2SkillsAgentClient(
+        AgentClientConfig(base_url="http://testserver"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.list_collections()[0]["id"] == "collection-1"
+    assert client.create_collection("产品书单", ["book-a", "book-b"], description="两本产品书")["id"] == "collection-1"
+    assert client.get_collection("collection-1")["id"] == "collection-1"
+    assert client.generate_collection_skill("collection-1", user_goal="提炼产品方法论")["status"] == "generating"
+    assert client.list_collection_skills("collection-1")[0]["status"] == "ready"
+    assert client.get_collection_skill("run-1")["status"] == "ready"
+    assert client.pack_collection_skill("run-1")["zip_path"] == "/tmp/skills.zip"
+    assert client.retry_collection_skill("run-1", user_goal="换个目标")["id"] == "run-2"
+
+    assert ("POST", "/api/collections", {"name": "产品书单", "description": "两本产品书", "book_ids": ["book-a", "book-b"]}) in seen
+    assert (
+        "POST",
+        "/api/collections/collection-1/generate",
+        {
+            "user_goal": "提炼产品方法论",
+            "reuse_extracted_kus": True,
+            "detect_conflicts": True,
+        },
+    ) in seen
+    assert (
+        "POST",
+        "/api/collection-skills/run-1/retry",
+        {
+            "user_goal": "换个目标",
+            "detect_conflicts": True,
+        },
+    ) in seen
+
+
+def test_download_collection_skill_writes_zip_bytes(tmp_path):
+    import httpx
+
+    from app.agent_client.client import Book2SkillsAgentClient
+    from app.agent_client.types import AgentClientConfig
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/collection-skills/run-1/download"
+        return httpx.Response(200, content=b"zip-bytes", headers={"content-type": "application/zip"})
+
+    output = tmp_path / "skills.zip"
+    client = Book2SkillsAgentClient(
+        AgentClientConfig(base_url="http://testserver"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.download_collection_skill("run-1", output)
+
+    assert result == {"path": str(output), "bytes": 9}
+    assert output.read_bytes() == b"zip-bytes"
+
+
+def test_wait_collection_skill_ready_polls_until_ready():
+    import httpx
+
+    from app.agent_client.client import Book2SkillsAgentClient
+    from app.agent_client.types import AgentClientConfig
+
+    statuses = iter(["generating", "ready"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/collection-skills/run-1"
+        return httpx.Response(200, json={"id": "run-1", "status": next(statuses)})
+
+    client = Book2SkillsAgentClient(
+        AgentClientConfig(base_url="http://testserver"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.wait_collection_skill_ready("run-1", timeout_seconds=5, interval_seconds=0)
+
+    assert result["status"] == "ready"
+
