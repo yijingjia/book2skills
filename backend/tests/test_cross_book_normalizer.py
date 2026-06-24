@@ -226,6 +226,7 @@ def test_build_top_k_similarity_candidates_skips_same_book_and_uses_rank():
     result = build_top_k_similarity_candidates(source_kus, embeddings, top_k=1)
 
     pairs = result["pairs"]
+    assert len(pairs) == 2
     assert pairs[0]["from_ku_id"] == "ku-0000"
     assert pairs[0]["to_ku_id"] == "ku-0001"
     assert all(
@@ -305,4 +306,117 @@ def test_build_normalization_result_from_candidates_uses_confirmed_judgments_onl
     ]
     assert same_groups[0]["member_ku_ids"] == ["ku-0000", "ku-0001"]
     assert len(result.deduped_view["knowledge_units"]) == 2
+
+
+def test_build_normalization_result_from_candidates_handles_malformed_judgments():
+    from app.pipeline.cross_book_normalizer import build_normalization_result_from_candidates
+
+    kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧")["ku"],
+        _source_ku("ku-0001", "book-b", "打好比方的方法")["ku"],
+    ]
+    source_kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧"),
+        _source_ku("ku-0001", "book-b", "打好比方的方法"),
+    ]
+    candidates = {
+        "pairs": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "similarity": 0.56,
+                "source_book_ids": ["book-a", "book-b"],
+            }
+        ]
+    }
+    # One valid judgment, one missing from_ku_id, one missing to_ku_id
+    judgments = {
+        "judgments": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "decision": "same_as",
+                "confidence": 0.86,
+            },
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "to_ku_id": "ku-0001",
+                "decision": "same_as",
+            },
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "decision": "same_as",
+            },
+        ]
+    }
+
+    result = build_normalization_result_from_candidates(
+        kus=kus,
+        source_kus=source_kus,
+        candidates=candidates,
+        judgments=judgments,
+    )
+
+    # The malformed ones should be filtered out without causing crash, only 1 valid same_as edge is made.
+    assert len(result.same_as_edges["edges"]) == 1
+    assert result.same_as_edges["edges"][0]["from_ku_id"] == "ku-0000"
+    assert result.same_as_edges["edges"][0]["to_ku_id"] == "ku-0001"
+
+
+def test_build_normalization_result_from_candidates_deduplicates_judgments():
+    from app.pipeline.cross_book_normalizer import build_normalization_result_from_candidates
+
+    kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧")["ku"],
+        _source_ku("ku-0001", "book-b", "打好比方的方法")["ku"],
+    ]
+    source_kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧"),
+        _source_ku("ku-0001", "book-b", "打好比方的方法"),
+    ]
+    candidates = {
+        "pairs": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "similarity": 0.56,
+                "source_book_ids": ["book-a", "book-b"],
+            }
+        ]
+    }
+    # Duplicate judgments for the same candidate pair.
+    judgments = {
+        "judgments": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "decision": "same_as",
+                "confidence": 0.86,
+            },
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "decision": "same_as",
+                "confidence": 0.90,
+            },
+        ]
+    }
+
+    result = build_normalization_result_from_candidates(
+        kus=kus,
+        source_kus=source_kus,
+        candidates=candidates,
+        judgments=judgments,
+    )
+
+    # Should only result in one same_as edge.
+    assert len(result.same_as_edges["edges"]) == 1
+    # Check that it kept the first one (confidence 0.86)
+    assert result.same_as_edges["edges"][0]["confidence"] == 0.86
 

@@ -57,12 +57,13 @@ def build_similarity_candidates(
         return {"pairs": []}
 
     similarities = cosine_similarity(embeddings)
+    ku_book_ids = [_book_ids_for_ku(item["ku"]) for item in source_kus]
     pairs = []
     for left_index, left in enumerate(source_kus):
-        left_books = _book_ids_for_ku(left["ku"])
+        left_books = ku_book_ids[left_index]
         for right_index in range(left_index + 1, len(source_kus)):
             right = source_kus[right_index]
-            right_books = _book_ids_for_ku(right["ku"])
+            right_books = ku_book_ids[right_index]
             if left_books & right_books:
                 continue
             similarity = float(similarities[left_index, right_index])
@@ -150,30 +151,31 @@ def build_top_k_similarity_candidates(
         return {"pairs": []}
 
     similarities = cosine_similarity(embeddings)
+    ku_book_ids = [_book_ids_for_ku(item["ku"]) for item in source_kus]
     seen: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
     for left_index, left in enumerate(source_kus):
-        left_books = _book_ids_for_ku(left["ku"])
-        ranked: list[tuple[float, dict[str, Any]]] = []
+        left_books = ku_book_ids[left_index]
+        ranked: list[tuple[float, int, dict[str, Any]]] = []
         for right_index, right in enumerate(source_kus):
             if left_index == right_index:
                 continue
-            right_books = _book_ids_for_ku(right["ku"])
+            right_books = ku_book_ids[right_index]
             if left_books & right_books:
                 continue
             similarity = float(similarities[left_index, right_index])
             if similarity < min_similarity:
                 continue
-            ranked.append((similarity, right))
+            ranked.append((similarity, right_index, right))
 
-        for similarity, right in sorted(ranked, key=lambda item: item[0], reverse=True)[:top_k]:
+        for similarity, right_index, right in sorted(ranked, key=lambda item: item[0], reverse=True)[:top_k]:
             left_id = left["ku_id"]
             right_id = right["ku_id"]
             ordered = tuple(sorted([left_id, right_id]))
             if ordered in seen:
                 continue
             seen.add(ordered)
-            source_book_ids = sorted(left_books | _book_ids_for_ku(right["ku"]))
+            source_book_ids = sorted(left_books | ku_book_ids[right_index])
             pairs.append(
                 {
                     "candidate_id": _candidate_id(ordered[0], ordered[1]),
@@ -186,8 +188,12 @@ def build_top_k_similarity_candidates(
     return {"pairs": pairs}
 
 
-def _judgment_key(judgment: dict[str, Any]) -> tuple[str, str]:
-    sorted_ids = sorted([str(judgment["from_ku_id"]), str(judgment["to_ku_id"])])
+def _judgment_key(judgment: dict[str, Any]) -> tuple[str, str] | None:
+    from_id = judgment.get("from_ku_id")
+    to_id = judgment.get("to_ku_id")
+    if not from_id or not to_id:
+        return None
+    sorted_ids = sorted([str(from_id), str(to_id)])
     return (sorted_ids[0], sorted_ids[1])
 
 
@@ -223,18 +229,24 @@ def build_normalization_result_from_candidates(
         tuple(sorted([pair["from_ku_id"], pair["to_ku_id"]])): pair
         for pair in candidates.get("pairs", [])
     }
-    confirmed = [
-        judgment
-        for judgment in _confirmed_judgment_pairs(judgments)
-        if _judgment_key(judgment) in candidate_by_key
-    ]
+    confirmed_pairs = _confirmed_judgment_pairs(judgments)
+    confirmed = []
+    seen_keys = set()
+    for judgment in confirmed_pairs:
+        key = _judgment_key(judgment)
+        if key is not None and key in candidate_by_key:
+            if key not in seen_keys:
+                seen_keys.add(key)
+                confirmed.append(judgment)
+
     components = _connected_components(source_kus, confirmed)
 
     edges = []
     for judgment in confirmed:
         key = _judgment_key(judgment)
+        assert key is not None
         pair = candidate_by_key[key]
-        edge_type = "same_as" if judgment["decision"] == "same_as" else "alias_of"
+        edge_type = "same_as" if judgment.get("decision") == "same_as" else "alias_of"
         edges.append(
             {
                 "edge_id": f"{edge_type}-{key[0]}-{key[1]}",
