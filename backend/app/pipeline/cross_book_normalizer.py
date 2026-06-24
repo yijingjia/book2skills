@@ -5,9 +5,16 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity  # type: ignore[import-untyped]
 
 from app.schemas.schemas import KnowledgeUnit
+
+CONFIRMED_SAME_AS_DECISIONS = {"same_as", "alias_of"}
+
+
+def _candidate_id(left_id: str, right_id: str) -> str:
+    return f"cand-{left_id}-{right_id}"
+
 
 
 def ku_normalization_text(ku: KnowledgeUnit) -> str:
@@ -63,6 +70,7 @@ def build_similarity_candidates(
                 continue
             pairs.append(
                 {
+                    "candidate_id": _candidate_id(left["ku_id"], right["ku_id"]),
                     "from_ku_id": left["ku_id"],
                     "to_ku_id": right["ku_id"],
                     "similarity": round(similarity, 6),
@@ -76,6 +84,7 @@ def build_similarity_candidates(
 class CrossBookNormalizationResult:
     source_kus: dict[str, Any]
     similarity_candidates: dict[str, list[dict[str, Any]]]
+    same_as_judgments: dict[str, list[dict[str, Any]]]
     normalized_ku_groups: dict[str, list[dict[str, Any]]]
     same_as_edges: dict[str, list[dict[str, Any]]]
     deduped_view: dict[str, Any]
@@ -130,41 +139,116 @@ def _connected_components(source_kus: list[dict[str, Any]], pairs: list[dict[str
     return [sorted(ids) for ids in groups.values()]
 
 
-def build_normalization_result(
-    kus: list[KnowledgeUnit],
+def build_top_k_similarity_candidates(
+    source_kus: list[dict[str, Any]],
     embeddings: np.ndarray,
-    threshold: float = 0.9,
+    top_k: int,
+    min_similarity: float = 0.35,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return each KU's top-k cross-book neighbors as candidate same_as pairs."""
+    if len(source_kus) <= 1:
+        return {"pairs": []}
+
+    similarities = cosine_similarity(embeddings)
+    seen: set[tuple[str, str]] = set()
+    pairs: list[dict[str, Any]] = []
+    for left_index, left in enumerate(source_kus):
+        left_books = _book_ids_for_ku(left["ku"])
+        ranked: list[tuple[float, dict[str, Any]]] = []
+        for right_index, right in enumerate(source_kus):
+            if left_index == right_index:
+                continue
+            right_books = _book_ids_for_ku(right["ku"])
+            if left_books & right_books:
+                continue
+            similarity = float(similarities[left_index, right_index])
+            if similarity < min_similarity:
+                continue
+            ranked.append((similarity, right))
+
+        for similarity, right in sorted(ranked, key=lambda item: item[0], reverse=True)[:top_k]:
+            left_id = left["ku_id"]
+            right_id = right["ku_id"]
+            ordered = tuple(sorted([left_id, right_id]))
+            if ordered in seen:
+                continue
+            seen.add(ordered)
+            source_book_ids = sorted(left_books | _book_ids_for_ku(right["ku"]))
+            pairs.append(
+                {
+                    "candidate_id": _candidate_id(ordered[0], ordered[1]),
+                    "from_ku_id": ordered[0],
+                    "to_ku_id": ordered[1],
+                    "similarity": round(similarity, 6),
+                    "source_book_ids": source_book_ids,
+                }
+            )
+    return {"pairs": pairs}
+
+
+def _judgment_key(judgment: dict[str, Any]) -> tuple[str, str]:
+    sorted_ids = sorted([str(judgment["from_ku_id"]), str(judgment["to_ku_id"])])
+    return (sorted_ids[0], sorted_ids[1])
+
+
+def _confirmed_judgment_pairs(judgments: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [
+        judgment
+        for judgment in judgments.get("judgments", [])
+        if judgment.get("decision") in CONFIRMED_SAME_AS_DECISIONS
+    ]
+
+
+def build_normalization_result_from_candidates(
+    *,
+    kus: list[KnowledgeUnit],
+    source_kus: list[dict[str, Any]],
+    candidates: dict[str, list[dict[str, Any]]],
+    judgments: dict[str, list[dict[str, Any]]],
 ) -> CrossBookNormalizationResult:
-    """Run blocking + grouping on pre-computed embeddings and return all normalization artifacts."""
+    """Build normalization artifacts from candidate pairs plus external judgments."""
     if not kus:
         return CrossBookNormalizationResult(
             source_kus={"knowledge_units": []},
             similarity_candidates={"pairs": []},
+            same_as_judgments={"judgments": []},
             normalized_ku_groups={"groups": []},
             same_as_edges={"edges": []},
             deduped_view={"knowledge_units_count": 0, "knowledge_units": []},
             deduped_view_kus=[],
         )
 
-    source_kus = assign_source_ku_ids(kus)
     source_by_id = {item["ku_id"]: item["ku"] for item in source_kus}
-    candidates = build_similarity_candidates(source_kus, embeddings, threshold)
-    pairs = candidates["pairs"]
-    components = _connected_components(source_kus, pairs)
-
-    edges = [
-        {
-            "edge_id": f"same-{pair['from_ku_id']}-{pair['to_ku_id']}",
-            "edge_type": "same_as",
-            "from_ku_id": pair["from_ku_id"],
-            "to_ku_id": pair["to_ku_id"],
-            "confidence": pair["similarity"],
-            "evidence": "embedding_similarity",
-            "status": "candidate",
-            "review_required": False,
-        }
-        for pair in pairs
+    candidate_by_key = {
+        tuple(sorted([pair["from_ku_id"], pair["to_ku_id"]])): pair
+        for pair in candidates.get("pairs", [])
+    }
+    confirmed = [
+        judgment
+        for judgment in _confirmed_judgment_pairs(judgments)
+        if _judgment_key(judgment) in candidate_by_key
     ]
+    components = _connected_components(source_kus, confirmed)
+
+    edges = []
+    for judgment in confirmed:
+        key = _judgment_key(judgment)
+        pair = candidate_by_key[key]
+        edge_type = "same_as" if judgment["decision"] == "same_as" else "alias_of"
+        edges.append(
+            {
+                "edge_id": f"{edge_type}-{key[0]}-{key[1]}",
+                "edge_type": edge_type,
+                "from_ku_id": key[0],
+                "to_ku_id": key[1],
+                "confidence": float(judgment.get("confidence", pair.get("similarity", 0.0))),
+                "evidence": judgment.get("evidence") or "same_as_judge",
+                "status": "confirmed",
+                "review_required": False,
+                "decided_by": judgment.get("decided_by", "backend_llm"),
+                "candidate_id": pair.get("candidate_id"),
+            }
+        )
 
     groups = []
     deduped_kus = []
@@ -185,6 +269,7 @@ def build_normalization_result(
     return CrossBookNormalizationResult(
         source_kus={"knowledge_units": [{"ku_id": item["ku_id"], **item["ku"].model_dump()} for item in source_kus]},
         similarity_candidates=candidates,
+        same_as_judgments={"judgments": judgments.get("judgments", [])},
         normalized_ku_groups={"groups": groups},
         same_as_edges={"edges": edges},
         deduped_view={
@@ -192,6 +277,43 @@ def build_normalization_result(
             "knowledge_units": [ku.model_dump() for ku in deduped_kus],
         },
         deduped_view_kus=deduped_kus,
+    )
+
+
+def build_normalization_result(
+    kus: list[KnowledgeUnit],
+    embeddings: np.ndarray,
+    threshold: float = 0.9,
+) -> CrossBookNormalizationResult:
+    if not kus:
+        return build_normalization_result_from_candidates(
+            kus=[],
+            source_kus=[],
+            candidates={"pairs": []},
+            judgments={"judgments": []},
+        )
+
+    source_kus = assign_source_ku_ids(kus)
+    candidates = build_similarity_candidates(source_kus, embeddings, threshold)
+    judgments = {
+        "judgments": [
+            {
+                "candidate_id": pair.get("candidate_id") or _candidate_id(pair["from_ku_id"], pair["to_ku_id"]),
+                "from_ku_id": pair["from_ku_id"],
+                "to_ku_id": pair["to_ku_id"],
+                "decision": "same_as",
+                "confidence": pair["similarity"],
+                "evidence": "embedding_similarity",
+                "decided_by": "embedding_threshold",
+            }
+            for pair in candidates["pairs"]
+        ]
+    }
+    return build_normalization_result_from_candidates(
+        kus=kus,
+        source_kus=source_kus,
+        candidates=candidates,
+        judgments=judgments,
     )
 
 

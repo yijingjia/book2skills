@@ -186,3 +186,123 @@ def test_normalization_result_exposes_pipeline_artifact_names():
         "same_as_edges.json",
         "deduped_view.json",
     }
+
+
+def _source_ku(ku_id, book_id, method):
+    from app.schemas.schemas import KnowledgeUnit
+
+    return {
+        "ku_id": ku_id,
+        "ku": KnowledgeUnit(
+            source_chunk_id=f"{book_id}_ch1_a01",
+            source_chapter_num=1,
+            method=method,
+            source_book_id=book_id,
+            source_book_title=f"Book {book_id}",
+            source_book_author=None,
+            source_books=[{"book_id": book_id, "title": f"Book {book_id}", "chapter_num": 1}],
+        ),
+    }
+
+
+def test_build_top_k_similarity_candidates_skips_same_book_and_uses_rank():
+    from app.pipeline.cross_book_normalizer import build_top_k_similarity_candidates
+
+    source_kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧"),
+        _source_ku("ku-0001", "book-b", "打好比方的方法"),
+        _source_ku("ku-0002", "book-a", "费曼技巧的另一种说法"),
+        _source_ku("ku-0003", "book-b", "时间管理"),
+    ]
+    embeddings = np.array(
+        [
+            [1.0, 0.0],
+            [0.82, 0.18],
+            [0.99, 0.01],
+            [0.0, 1.0],
+        ]
+    )
+
+    result = build_top_k_similarity_candidates(source_kus, embeddings, top_k=1)
+
+    pairs = result["pairs"]
+    assert pairs[0]["from_ku_id"] == "ku-0000"
+    assert pairs[0]["to_ku_id"] == "ku-0001"
+    assert all(
+        set(pair["source_book_ids"]) == {"book-a", "book-b"}
+        for pair in pairs
+    )
+
+
+def test_build_normalization_result_from_candidates_uses_confirmed_judgments_only():
+    from app.pipeline.cross_book_normalizer import build_normalization_result_from_candidates
+
+    kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧")["ku"],
+        _source_ku("ku-0001", "book-b", "打好比方的方法")["ku"],
+        _source_ku("ku-0002", "book-b", "时间管理")["ku"],
+    ]
+    source_kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧"),
+        _source_ku("ku-0001", "book-b", "打好比方的方法"),
+        _source_ku("ku-0002", "book-b", "时间管理"),
+    ]
+    candidates = {
+        "pairs": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "similarity": 0.56,
+                "source_book_ids": ["book-a", "book-b"],
+            },
+            {
+                "candidate_id": "cand-ku-0000-ku-0002",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0002",
+                "similarity": 0.55,
+                "source_book_ids": ["book-a", "book-b"],
+            },
+        ]
+    }
+    judgments = {
+        "judgments": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "decision": "same_as",
+                "confidence": 0.86,
+                "evidence": "两者都要求用简单类比解释复杂概念。",
+                "decided_by": "backend_llm",
+            },
+            {
+                "candidate_id": "cand-ku-0000-ku-0002",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0002",
+                "decision": "related_but_distinct",
+                "confidence": 0.72,
+                "evidence": "同属学习主题，但操作对象不同。",
+                "decided_by": "backend_llm",
+            },
+        ]
+    }
+
+    result = build_normalization_result_from_candidates(
+        kus=kus,
+        source_kus=source_kus,
+        candidates=candidates,
+        judgments=judgments,
+    )
+
+    assert len(result.same_as_edges["edges"]) == 1
+    assert result.same_as_edges["edges"][0]["edge_type"] == "same_as"
+    assert result.same_as_edges["edges"][0]["confidence"] == 0.86
+    assert len(result.same_as_judgments["judgments"]) == 2
+    same_groups = [
+        group for group in result.normalized_ku_groups["groups"]
+        if group["relationship"] == "same_as"
+    ]
+    assert same_groups[0]["member_ku_ids"] == ["ku-0000", "ku-0001"]
+    assert len(result.deduped_view["knowledge_units"]) == 2
+
