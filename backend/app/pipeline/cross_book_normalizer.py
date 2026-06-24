@@ -346,41 +346,45 @@ async def normalize_cross_book_kus(
     min_similarity: float = 0.35,
     judge=None,
 ) -> CrossBookNormalizationResult:
-    if not kus:
-        return build_normalization_result([], np.array([]), threshold=threshold)
-    texts = [ku_normalization_text(ku) for ku in kus]
-    if hasattr(embedder, "aembed_documents"):
-        embeddings = await embedder.aembed_documents(texts)
-    else:
-        embeddings = [await embedder.aembed_query(text) for text in texts]
-    embeddings_array = np.array(embeddings)
+    try:
+        if not kus:
+            return build_normalization_result([], np.array([]), threshold=threshold)
+        texts = [ku_normalization_text(ku) for ku in kus]
+        if hasattr(embedder, "aembed_documents"):
+            embeddings = await embedder.aembed_documents(texts)
+        else:
+            embeddings = [await embedder.aembed_query(text) for text in texts]
+        embeddings_array = np.array(embeddings)
 
-    if judge is None or top_k is None:
-        return build_normalization_result(kus, embeddings_array, threshold=threshold)
+        if judge is None or top_k is None:
+            return build_normalization_result(kus, embeddings_array, threshold=threshold)
 
-    source_kus = assign_source_ku_ids(kus)
-    candidates = build_top_k_similarity_candidates(
-        source_kus,
-        embeddings_array,
-        top_k=top_k,
-        min_similarity=min_similarity,
-    )
-    source_kus_artifact = {
-        "knowledge_units": [
-            {"ku_id": item["ku_id"], **item["ku"].model_dump()}
-            for item in source_kus
-        ]
-    }
-    # Safely manage LLM client lifecycle if judge supports context manager:
-    if hasattr(judge, "__aenter__"):
-        async with judge:
+        source_kus = assign_source_ku_ids(kus)
+        candidates = build_top_k_similarity_candidates(
+            source_kus,
+            embeddings_array,
+            top_k=top_k,
+            min_similarity=min_similarity,
+        )
+        source_kus_artifact = {
+            "knowledge_units": [
+                {"ku_id": item["ku_id"], **item["ku"].model_dump()}
+                for item in source_kus
+            ]
+        }
+        # Safely manage LLM client lifecycle if judge supports context manager:
+        if hasattr(judge, "__aenter__"):
+            async with judge:
+                judgments = await judge.judge(source_kus=source_kus_artifact, candidates=candidates)
+        else:
             judgments = await judge.judge(source_kus=source_kus_artifact, candidates=candidates)
-    else:
-        judgments = await judge.judge(source_kus=source_kus_artifact, candidates=candidates)
 
-    return build_normalization_result_from_candidates(
-        kus=kus,
-        source_kus=source_kus,
-        candidates=candidates,
-        judgments=judgments,
-    )
+        return build_normalization_result_from_candidates(
+            kus=kus,
+            source_kus=source_kus,
+            candidates=candidates,
+            judgments=judgments,
+        )
+    finally:
+        if judge is not None and hasattr(judge, "aclose"):
+            await judge.aclose()

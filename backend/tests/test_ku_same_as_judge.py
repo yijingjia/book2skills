@@ -1,4 +1,5 @@
 import json
+
 import pytest
 
 from app.pipeline.ku_same_as_judge import extract_judgment_items, normalize_judge_response
@@ -70,7 +71,8 @@ def test_normalize_judge_response_filters_invalid_and_coerces_decisions():
 
 @pytest.mark.asyncio
 async def test_ku_same_as_judge_batches_calls_and_merges_results():
-    from unittest.mock import patch, MagicMock, AsyncMock
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from app.pipeline.ku_same_as_judge import KUSameAsJudge
 
     source_kus = {
@@ -170,7 +172,7 @@ async def test_signatures_support_positional_arguments():
         # We should be able to call judge.judge(source_kus, candidates) positionally
         # We will mock _judge_batch to avoid deep client calls
         judge._judge_batch = AsyncMock(return_value={"judgments": []})
-        
+
         await judge.judge({"knowledge_units": []}, {"pairs": []})
 
 
@@ -199,21 +201,25 @@ def test_extract_judgment_items_accumulates_all_lists():
 
 @pytest.mark.asyncio
 async def test_ku_same_as_judge_aclose():
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
+
     from app.pipeline.ku_same_as_judge import KUSameAsJudge
-    
-    with patch("app.pipeline.ku_same_as_judge.get_llm_client") as mock_get_client, \
+
+    with patch("app.pipeline.ku_same_as_judge.get_llm_client"), \
          patch("app.pipeline.ku_same_as_judge.close_llm_client", new_callable=AsyncMock) as mock_close:
-        
+
         judge = KUSameAsJudge()
+        client = judge.client
         await judge.aclose()
-        mock_close.assert_called_once_with(judge.client)
+        mock_close.assert_called_once_with(client)
+        assert judge.client is None
 
 
 def test_batch_prompt_skips_missing_ku_ids(caplog):
     import logging
+
     from app.pipeline.ku_same_as_judge import _batch_prompt
-    
+
     source_kus = {
         "knowledge_units": [
             {"ku_id": "ku-0001", "method": "M1"},
@@ -222,10 +228,10 @@ def test_batch_prompt_skips_missing_ku_ids(caplog):
     pairs = [
         {"candidate_id": "c1", "from_ku_id": "ku-0001", "to_ku_id": "ku-0002"},
     ]
-    
+
     with caplog.at_level(logging.WARNING):
         res_str = _batch_prompt(source_kus, pairs)
-        
+
     assert "Skipping pair c1: KU id not found in source_kus." in caplog.text
     res = json.loads(res_str)
     assert res == {"pairs": []}
@@ -233,16 +239,19 @@ def test_batch_prompt_skips_missing_ku_ids(caplog):
 
 @pytest.mark.asyncio
 async def test_ku_same_as_judge_async_context_manager():
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
+
     from app.pipeline.ku_same_as_judge import KUSameAsJudge
-    
+
     with patch("app.pipeline.ku_same_as_judge.get_llm_client") as mock_get_client, \
          patch("app.pipeline.ku_same_as_judge.close_llm_client", new_callable=AsyncMock) as mock_close:
-        
+
         async with KUSameAsJudge() as judge:
             assert isinstance(judge, KUSameAsJudge)
-            assert judge.client == mock_get_client.return_value
+            client = judge.client
+            assert client == mock_get_client.return_value
             mock_close.assert_not_called()
-            
-        mock_close.assert_called_once_with(judge.client)
+
+        mock_close.assert_called_once_with(client)
+        assert judge.client is None
 

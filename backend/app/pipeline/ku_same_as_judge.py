@@ -131,7 +131,9 @@ class KUSameAsJudge:
         await self.aclose()
 
     async def aclose(self) -> None:
-        await close_llm_client(self.client)
+        if self.client is not None:
+            await close_llm_client(self.client)
+            self.client = None
 
     async def judge(
         self,
@@ -140,23 +142,23 @@ class KUSameAsJudge:
     ) -> dict[str, list[dict[str, Any]]]:
         pairs = candidates.get("pairs", [])
         logger.info(f"Starting LLM judgment for {len(pairs)} pairs with batch size {self.batch_size}")
-        
+
         sem = asyncio.Semaphore(5)  # Limit to 5 concurrent calls
-        
+
         async def _throttled_judge_batch(batch):
             async with sem:
                 return await self._judge_batch(source_kus, {"pairs": batch})
-                
+
         tasks = []
         for index in range(0, len(pairs), self.batch_size):
             batch = pairs[index : index + self.batch_size]
             tasks.append(_throttled_judge_batch(batch))
-            
+
         results = await asyncio.gather(*tasks)
         all_judgments = []
         for res in results:
             all_judgments.extend(res["judgments"])
-        
+
         logger.info(f"Completed judgment for {len(pairs)} pairs, generated {len(all_judgments)} judgments")
         return {"judgments": all_judgments}
 
@@ -168,7 +170,7 @@ class KUSameAsJudge:
     ) -> dict[str, list[dict[str, Any]]]:
         pairs = candidates.get("pairs", [])
         logger.info(f"Judging batch with {len(pairs)} pairs")
-        
+
         system_prompt = (
             "你是一个跨书籍知识单元（KU）归一化评审器。判断每对 KU 是否表达同一个或相关的方法、原则或步骤。\n"
             "只输出 JSON 格式的对象，不要包含任何额外的描述或 Markdown 标记。格式如下：\n"
@@ -183,7 +185,7 @@ class KUSameAsJudge:
             "  ]\n"
             "}"
         )
-        
+
         response = await self.client.chat.completions.create(
             model=get_chat_model(),
             messages=[

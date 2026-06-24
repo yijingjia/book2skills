@@ -521,3 +521,28 @@ def test_dedupe_source_books_coerces_book_id_to_str():
     assert len(deduped) == 1
     assert str(deduped[0]["book_id"]) == "123"
 
+
+@pytest.mark.asyncio
+async def test_normalize_cross_book_kus_closes_judge_on_embedding_error():
+    from unittest.mock import AsyncMock, MagicMock
+
+    kus = [make_ku("MVP", "先小步验证", book_id="book-a")]
+
+    embedder = MagicMock()
+    # Mock aembed_documents to raise an exception
+    embedder.aembed_documents = AsyncMock(side_effect=ValueError("Embedding error"))
+
+    judge = AsyncMock()
+    judge.aclose = AsyncMock()
+
+    with pytest.raises(ValueError, match="Embedding error"):
+        await normalize_cross_book_kus(
+            kus,
+            embedder,
+            threshold=0.9,
+            top_k=2,
+            judge=judge,
+        )
+
+    judge.aclose.assert_awaited_once()
+

@@ -177,6 +177,7 @@ draft | generating | ready | error
 ```text
 source_kus.json
 ku_similarity_candidates.json
+same_as_judgments.json
 normalized_ku_groups.json
 same_as_edges.json
 deduped_view.json
@@ -195,6 +196,7 @@ source_kus.json
 
 pipeline_phase = "normalized_kus_ready"
 ku_similarity_candidates.json
+same_as_judgments.json
 normalized_ku_groups.json
 same_as_edges.json
 deduped_view.json
@@ -383,12 +385,16 @@ SourceBackedKnowledgeUnit
 ```text
 source_kus.json
 ku_similarity_candidates.json
+same_as_judgments.json
 normalized_ku_groups.json
 same_as_edges.json
 deduped_view.json
 ```
 
 `source_kus.json` 保存所有带来源的原始 KU。`deduped_view.json` 才是供 theme clustering / skill generation 使用的折叠视图。
+
+same_as_judgments.json
+  All candidate-pair decisions. Includes confirmed, rejected, and related-but-distinct judgments.
 
 `normalized_ku_groups.json` 示例：
 
@@ -446,6 +452,27 @@ variants[]
 - 所有来源都合并进 `sources[]`，同时保留 `same_as_edges.json` 解释为什么这些 KU 被折叠。
 - 若两个 KU 相似但适用条件明显不同，不合并为重复项，而交给 tension detection。
 - 阈值不能作为最终裁决；例如 0.9 只能进入候选队列，不能直接决定删除或合并。
+
+### Dual-Channel Collection Normalization
+
+Book2Skills supports two collection-generation channels:
+
+1. **Backend LLM channel**: Web/Celery generation calls the configured backend LLM to judge KU-level `same_as` / `alias_of` candidate pairs.
+2. **Agent-native channel**: Codex/Claude reads KU candidates through MCP, performs pairwise judgments in the agent session, and submits those judgments back to Book2Skills.
+
+Both channels share the same backend normalization contract. The only difference is the source of `same_as_judgments.json`.
+
+```text
+source_kus + ku_similarity_candidates + same_as_judgments
+  -> build_normalization_result_from_candidates
+  -> same_as_edges + normalized_ku_groups + deduped_view
+```
+
+Agents must submit pair-level judgments only. They must not submit `normalized_ku_groups` or `deduped_view`; those are deterministic backend artifacts owned by Book2Skills.
+
+`claim_key`, `canonical_identity_id`, and registry-backed identity fields are reserved for the later KG/identity phase. Current KU-level artifacts must not invent stable claim identities, but their schemas should remain compatible with adding those fields later.
+
+Future holistic routing is allowed only if it still outputs pair-level judgments into this same builder. It must not bypass the shared `build_normalization_result_from_candidates` contract by directly emitting groups.
 
 ### Phase 3: Theme Clustering
 
