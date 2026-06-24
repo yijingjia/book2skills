@@ -341,6 +341,10 @@ async def normalize_cross_book_kus(
     kus: list[KnowledgeUnit],
     embedder,
     threshold: float = 0.9,
+    *,
+    top_k: int | None = None,
+    min_similarity: float = 0.35,
+    judge=None,
 ) -> CrossBookNormalizationResult:
     if not kus:
         return build_normalization_result([], np.array([]), threshold=threshold)
@@ -349,4 +353,34 @@ async def normalize_cross_book_kus(
         embeddings = await embedder.aembed_documents(texts)
     else:
         embeddings = [await embedder.aembed_query(text) for text in texts]
-    return build_normalization_result(kus, np.array(embeddings), threshold=threshold)
+    embeddings_array = np.array(embeddings)
+
+    if judge is None or top_k is None:
+        return build_normalization_result(kus, embeddings_array, threshold=threshold)
+
+    source_kus = assign_source_ku_ids(kus)
+    candidates = build_top_k_similarity_candidates(
+        source_kus,
+        embeddings_array,
+        top_k=top_k,
+        min_similarity=min_similarity,
+    )
+    source_kus_artifact = {
+        "knowledge_units": [
+            {"ku_id": item["ku_id"], **item["ku"].model_dump()}
+            for item in source_kus
+        ]
+    }
+    # Safely manage LLM client lifecycle if judge supports context manager:
+    if hasattr(judge, "__aenter__"):
+        async with judge:
+            judgments = await judge.judge(source_kus=source_kus_artifact, candidates=candidates)
+    else:
+        judgments = await judge.judge(source_kus=source_kus_artifact, candidates=candidates)
+
+    return build_normalization_result_from_candidates(
+        kus=kus,
+        source_kus=source_kus,
+        candidates=candidates,
+        judgments=judgments,
+    )

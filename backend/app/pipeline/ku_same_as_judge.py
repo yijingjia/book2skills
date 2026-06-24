@@ -87,8 +87,11 @@ def _batch_prompt(source_kus: dict[str, Any], pairs: list[dict[str, Any]]) -> st
     by_id = _ku_by_id(source_kus)
     pair_payload = []
     for pair in pairs:
-        left = by_id[pair["from_ku_id"]]
-        right = by_id[pair["to_ku_id"]]
+        left = by_id.get(str(pair["from_ku_id"]))
+        right = by_id.get(str(pair["to_ku_id"]))
+        if not left or not right:
+            logger.warning(f"Skipping pair {pair.get('candidate_id')}: KU id not found in source_kus.")
+            continue
         pair_payload.append(
             {
                 "candidate_id": pair["candidate_id"],
@@ -121,6 +124,12 @@ class KUSameAsJudge:
         self.batch_size = batch_size
         self.client = get_llm_client()
 
+    async def __aenter__(self) -> KUSameAsJudge:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
+
     async def aclose(self) -> None:
         await close_llm_client(self.client)
 
@@ -131,11 +140,18 @@ class KUSameAsJudge:
     ) -> dict[str, list[dict[str, Any]]]:
         pairs = candidates.get("pairs", [])
         logger.info(f"Starting LLM judgment for {len(pairs)} pairs with batch size {self.batch_size}")
+        
+        sem = asyncio.Semaphore(5)  # Limit to 5 concurrent calls
+        
+        async def _throttled_judge_batch(batch):
+            async with sem:
+                return await self._judge_batch(source_kus, {"pairs": batch})
+                
         tasks = []
         for index in range(0, len(pairs), self.batch_size):
             batch = pairs[index : index + self.batch_size]
-            tasks.append(self._judge_batch(source_kus, {"pairs": batch}))
-        
+            tasks.append(_throttled_judge_batch(batch))
+            
         results = await asyncio.gather(*tasks)
         all_judgments = []
         for res in results:

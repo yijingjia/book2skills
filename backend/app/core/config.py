@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # Query expansion (off by default to save LLM cost; enable for better recall on short queries)
     RETRIEVAL_USE_QUERY_EXPANSION: bool = False
     RETRIEVAL_QUERY_EXPANSION_N: int = 3  # Number of alternative queries to generate
+    COLLECTION_NORMALIZATION_TOP_K: int = 8
+    COLLECTION_NORMALIZATION_MIN_SIMILARITY: float = 0.35  # Garbage floor only; top-k drives recall because Chinese KU cosine values are compressed.
+    COLLECTION_SAME_AS_JUDGE_BATCH_SIZE: int = 30
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
 

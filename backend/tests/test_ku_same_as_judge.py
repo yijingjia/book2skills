@@ -209,3 +209,40 @@ async def test_ku_same_as_judge_aclose():
         await judge.aclose()
         mock_close.assert_called_once_with(judge.client)
 
+
+def test_batch_prompt_skips_missing_ku_ids(caplog):
+    import logging
+    from app.pipeline.ku_same_as_judge import _batch_prompt
+    
+    source_kus = {
+        "knowledge_units": [
+            {"ku_id": "ku-0001", "method": "M1"},
+        ]
+    }
+    pairs = [
+        {"candidate_id": "c1", "from_ku_id": "ku-0001", "to_ku_id": "ku-0002"},
+    ]
+    
+    with caplog.at_level(logging.WARNING):
+        res_str = _batch_prompt(source_kus, pairs)
+        
+    assert "Skipping pair c1: KU id not found in source_kus." in caplog.text
+    res = json.loads(res_str)
+    assert res == {"pairs": []}
+
+
+@pytest.mark.asyncio
+async def test_ku_same_as_judge_async_context_manager():
+    from unittest.mock import patch, AsyncMock
+    from app.pipeline.ku_same_as_judge import KUSameAsJudge
+    
+    with patch("app.pipeline.ku_same_as_judge.get_llm_client") as mock_get_client, \
+         patch("app.pipeline.ku_same_as_judge.close_llm_client", new_callable=AsyncMock) as mock_close:
+        
+        async with KUSameAsJudge() as judge:
+            assert isinstance(judge, KUSameAsJudge)
+            assert judge.client == mock_get_client.return_value
+            mock_close.assert_not_called()
+            
+        mock_close.assert_called_once_with(judge.client)
+

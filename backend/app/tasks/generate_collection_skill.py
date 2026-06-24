@@ -115,6 +115,7 @@ async def _generate_collection_skill_async(
         build_consensus_artifacts,
     )
     from app.pipeline.cross_book_normalizer import normalize_cross_book_kus
+    from app.pipeline.ku_same_as_judge import KUSameAsJudge
     from app.pipeline.router_generator import RouterGenerator
     from app.pipeline.skill_generator import SkillGenerator
     from app.schemas.schemas import ModularSkill
@@ -180,7 +181,13 @@ async def _generate_collection_skill_async(
             # Step 7: non-destructive normalization
             current_phase = "normalizing_kus"
             embedder = get_embedding_client()
-            normalization = await normalize_cross_book_kus(all_source_kus, embedder, threshold=0.9)
+            normalization = await normalize_cross_book_kus(
+                all_source_kus,
+                embedder,
+                top_k=settings.COLLECTION_NORMALIZATION_TOP_K,
+                min_similarity=settings.COLLECTION_NORMALIZATION_MIN_SIMILARITY,
+                judge=KUSameAsJudge(batch_size=settings.COLLECTION_SAME_AS_JUDGE_BATCH_SIZE),
+            )
             deduped_kus = normalization.deduped_view_kus
 
             # Step 8: checkpoint normalized_kus_ready
@@ -190,6 +197,7 @@ async def _generate_collection_skill_async(
                 "normalized_kus_ready",
                 {
                     "ku_similarity_candidates.json": _json(normalization.similarity_candidates),
+                    "same_as_judgments.json": _json(normalization.same_as_judgments),
                     "normalized_ku_groups.json": _json(normalization.normalized_ku_groups),
                     "same_as_edges.json": _json(normalization.same_as_edges),
                     "deduped_view.json": _json(normalization.deduped_view),
