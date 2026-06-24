@@ -109,9 +109,12 @@ async def _generate_collection_skill_async(
     from app.core.llm import close_embedding_client, get_embedding_client
     from app.models.models import CollectionSkillPackage
     from app.pipeline.cluster_generator import ClusterGenerator
-    from app.pipeline.collection_ku_loader import load_collection_with_books, load_latest_book_kus
+    from app.pipeline.collection_ku_loader import load_book_kus, load_collection_with_books
     from app.pipeline.collection_ku_processor import semantic_deduplicate_kus
-    from app.pipeline.collection_synthesis import build_candidate_tension_artifacts, build_consensus_artifacts
+    from app.pipeline.collection_synthesis import (
+        build_candidate_tension_artifacts,
+        build_consensus_artifacts,
+    )
     from app.pipeline.router_generator import RouterGenerator
     from app.pipeline.skill_generator import SkillGenerator
     from app.schemas.schemas import ModularSkill
@@ -154,7 +157,7 @@ async def _generate_collection_skill_async(
             current_phase = "loading_kus"
             all_source_kus = []
             for book in books:
-                book_kus = await load_latest_book_kus(db, book)
+                book_kus = await load_book_kus(db, book)
                 all_source_kus.extend(book_kus)
 
             source_books_meta = [

@@ -14,9 +14,14 @@ import re
 import uuid
 
 from app.core.config import settings
+from app.schemas.schemas import KnowledgeUnit
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _knowledge_units_to_store_items(kus: list[KnowledgeUnit]) -> list[dict]:
+    return [{"ku": ku, "source_quote": None, "tags": []} for ku in kus]
 
 
 @celery_app.task(bind=True, max_retries=2)
@@ -70,12 +75,16 @@ async def _generate_skill_async(
 
     from app.core.llm import get_embedding_client
     from app.models.models import Skill, SkillPackage
+    from app.pipeline.book_knowledge_unit_store import (
+        load_book_knowledge_units_for_book_id,
+        replace_book_knowledge_units,
+    )
     from app.pipeline.cluster_generator import ClusterGenerator
     from app.pipeline.extractor import KnowledgeExtractor
     from app.pipeline.retriever import RAGRetriever
     from app.pipeline.router_generator import RouterGenerator
     from app.pipeline.skill_generator import SkillGenerator
-    from app.schemas.schemas import KnowledgeUnit, ModularSkill
+    from app.schemas.schemas import ModularSkill
 
     # 在任务内部创建独立引擎
     engine = create_async_engine(settings.DATABASE_URL)
@@ -104,35 +113,17 @@ async def _generate_skill_async(
             retriever = RAGRetriever()
 
             # --- 检查是否可以复用 KUs ---
+            kus_loaded_from_table = False
             if reuse_extracted_kus:
-                # 1. 先看当前 package 是否有数据
-                saved_json = skill.scripts.get("extracted_kus.json") or skill.scripts.get("extracted_kus_partial.json") if skill.scripts else None
-
-                # 2. 如果当前没有，去搜寻这本书名下最近的一个有数据的 package
-                if not saved_json:
-                    from sqlalchemy import select
-                    logger.info(f"Looking for previous extractions for book {book_id} to reuse KUs...")
-                    stmt = (
-                        select(SkillPackage)
-                        .where(SkillPackage.book_id == uuid.UUID(book_id))
-                        .where(SkillPackage.scripts.isnot(None))
-                        .order_by(SkillPackage.created_at.desc())
-                        .limit(1)
+                existing_kus = await load_book_knowledge_units_for_book_id(db, uuid.UUID(book_id))
+                if existing_kus:
+                    kus = existing_kus
+                    kus_loaded_from_table = True
+                    logger.info(
+                        "Loaded %d KUs from book_knowledge_units for book %s.",
+                        len(kus),
+                        book_id,
                     )
-                    prev_result = await db.execute(stmt)
-                    prev_skill = prev_result.scalar_one_or_none()
-                    if prev_skill and prev_skill.scripts:
-                        saved_json = prev_skill.scripts.get("extracted_kus.json") or prev_skill.scripts.get("extracted_kus_partial.json")
-                        if saved_json:
-                            logger.info(f"Found existing KUs in previous package {prev_skill.id}")
-
-                if saved_json:
-                    try:
-                        raw_kus = json.loads(saved_json)
-                        kus = [KnowledgeUnit(**k) for k in raw_kus]
-                        logger.info(f"🚀 Cross-task Resume: Successfully loaded {len(kus)} KUs.")
-                    except Exception as e:
-                        logger.warning(f"Failed to deserialize saved KUs: {e}")
 
             if not kus:
                 # --- Phase 1: 检索 Chunks ---
@@ -189,6 +180,16 @@ async def _generate_skill_async(
                 "pipeline_phase": "phase2_completed",
             }
             await db.commit()
+            if not kus_loaded_from_table:
+                await replace_book_knowledge_units(
+                    db=db,
+                    book_id=uuid.UUID(book_id),
+                    units=_knowledge_units_to_store_items(kus),
+                    generated_by="llm",
+                    generator_name=None,
+                    skill_package_id=uuid.UUID(skill_package_id),
+                )
+                await db.commit()
             current_phase = "phase2_checkpointed"
             logger.info(
                 "Phase 2 checkpoint persisted for package %s (KUs=%d).",

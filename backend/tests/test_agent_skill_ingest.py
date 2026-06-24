@@ -1,6 +1,9 @@
 import uuid
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
+from app.api.routes.books import _ensure_book_has_knowledge_units
 from app.pipeline.skill_persistence import (
     _with_vector_index_status,
     build_agent_skill_markdown,
@@ -41,6 +44,21 @@ class FakeEmbedder:
         return [[0.1, 0.2, 0.3] for _ in texts]
 
 
+class FakeKUCheckSession:
+    def __init__(self, has_ku: bool):
+        self.has_ku = has_ku
+
+    async def execute(self, _statement):
+        class Result:
+            def __init__(self, has_ku: bool):
+                self.has_ku = has_ku
+
+            def scalar_one_or_none(self):
+                return "ku-id" if self.has_ku else None
+
+        return Result(self.has_ku)
+
+
 def make_skill(name: str = "Customer_Discovery") -> ModularSkill:
     return ModularSkill(
         name=name,
@@ -56,6 +74,20 @@ def make_skill(name: str = "Customer_Discovery") -> ModularSkill:
         ],
         references_keywords=["customer discovery"],
     )
+
+
+async def test_ensure_book_has_knowledge_units_accepts_existing_ku():
+    await _ensure_book_has_knowledge_units(FakeKUCheckSession(True), uuid.uuid4())
+
+
+async def test_ensure_book_has_knowledge_units_rejects_missing_ku():
+    try:
+        await _ensure_book_has_knowledge_units(FakeKUCheckSession(False), uuid.uuid4())
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "knowledge units" in exc.detail.lower()
+    else:
+        raise AssertionError("Expected missing KU rejection")
 
 
 def test_build_agent_skill_markdown_combines_router_and_modules():

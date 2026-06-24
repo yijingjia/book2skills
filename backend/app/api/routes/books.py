@@ -25,8 +25,14 @@ from app.models.models import (
     Skill,
     SkillPackage,
 )
+from app.pipeline.book_knowledge_unit_store import (
+    book_has_knowledge_units,
+    replace_book_knowledge_units,
+)
 from app.pipeline.skill_persistence import persist_agent_skill_package
 from app.schemas.schemas import (
+    AgentKnowledgeUnit,
+    AgentKnowledgeUnitIngestRequest,
     AgentSkillIngestRequest,
     BookContentChapter,
     BookContentResponse,
@@ -35,6 +41,7 @@ from app.schemas.schemas import (
     BookStatusResponse,
     BookUploadResponse,
     ChapterResponse,
+    KnowledgeUnit,
     SkillPackageResponse,
 )
 from app.tasks.process_book import process_book_task
@@ -123,6 +130,36 @@ def _build_book_content_response(
         mode=mode,
         chapters=response_chapters,
     )
+
+
+def _validate_agent_ku_chapters(units: list[AgentKnowledgeUnit], valid_chapters: set[int]) -> None:
+    invalid = sorted(
+        {unit.source_chapter_num for unit in units if unit.source_chapter_num not in valid_chapters}
+    )
+    if invalid:
+        raise HTTPException(422, detail=f"KU 引用了不存在的章节：{invalid}")
+
+
+def _agent_ku_to_store_item(book_id: str, index: int, unit: AgentKnowledgeUnit) -> dict:
+    source_chunk_id = unit.source_chunk_id or f"{book_id}_ch{unit.source_chapter_num}_agent_{index + 1:04d}"
+    return {
+        "ku": KnowledgeUnit(
+            source_chunk_id=source_chunk_id,
+            source_chapter_num=unit.source_chapter_num,
+            principle=unit.principle,
+            method=unit.method,
+            step_by_step=unit.step_by_step,
+            example=unit.example,
+            when_to_use=unit.when_to_use,
+        ),
+        "source_quote": unit.source_quote,
+        "tags": unit.tags,
+    }
+
+
+async def _ensure_book_has_knowledge_units(db: AsyncSession, book_id: uuid.UUID) -> None:
+    if not await book_has_knowledge_units(db, book_id):
+        raise HTTPException(400, detail="请先提交该书的 knowledge units，再写入 skill")
 
 
 def _safe_delete_path(path: Path) -> None:
@@ -400,6 +437,37 @@ async def get_book_content(
     )
 
 
+@router.post("/{book_id}/knowledge-units")
+async def ingest_book_knowledge_units(
+    book_id: uuid.UUID,
+    request: AgentKnowledgeUnitIngestRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    book = await db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, detail="书籍不存在")
+    if book.status != "ready":
+        raise HTTPException(400, detail=f"书籍尚未处理完成，当前状态：{book.status}")
+
+    references_index = _load_references_index(_references_dir(book_id))
+    valid_chapters = {int(item["chapter_num"]) for item in references_index.get("chapters", [])}
+    _validate_agent_ku_chapters(request.knowledge_units, valid_chapters)
+
+    rows = await replace_book_knowledge_units(
+        db=db,
+        book_id=book_id,
+        units=[
+            _agent_ku_to_store_item(str(book_id), item_index, unit)
+            for item_index, unit in enumerate(request.knowledge_units)
+        ],
+        generated_by="agent",
+        generator_name=request.generator_name,
+        skill_package_id=None,
+    )
+    await db.commit()
+    return {"book_id": book_id, "knowledge_units_count": len(rows), "status": "ready"}
+
+
 @router.post("/{book_id}/skills", response_model=SkillPackageResponse)
 async def ingest_agent_skill(
     book_id: uuid.UUID,
@@ -411,6 +479,7 @@ async def ingest_agent_skill(
         raise HTTPException(404, detail="书籍不存在")
     if book.status != "ready":
         raise HTTPException(400, detail=f"书籍尚未处理完成，当前状态：{book.status}")
+    await _ensure_book_has_knowledge_units(db, book_id)
     skill_package = await persist_agent_skill_package(
         db=db,
         book_id=book_id,

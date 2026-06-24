@@ -1,11 +1,14 @@
-import json
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.models import Book, Collection, CollectionBook, SkillPackage
+from app.models.models import Book, BookKnowledgeUnit, Collection, CollectionBook
+from app.pipeline.book_knowledge_unit_store import (
+    book_ku_to_knowledge_unit,
+    load_book_knowledge_unit_rows,
+)
 from app.schemas.schemas import KnowledgeUnit
 
 
@@ -13,23 +16,10 @@ class MissingReusableKUsError(ValueError):
     pass
 
 
-def extract_kus_from_scripts(scripts: dict | None) -> list[KnowledgeUnit]:
-    if not scripts:
-        raise MissingReusableKUsError("未找到可复用的 KU：技能包 scripts 为空")
-    raw = scripts.get("extracted_kus.json") or scripts.get("extracted_kus_partial.json")
-    if not raw:
-        raise MissingReusableKUsError("未找到 extracted_kus.json 或 extracted_kus_partial.json")
-    data = json.loads(raw)
-    return [KnowledgeUnit(**item) for item in data]
-
-
-def annotate_source_kus(
-    book: Book,
-    package: SkillPackage,
-    kus: list[KnowledgeUnit],
-) -> list[KnowledgeUnit]:
+def annotate_book_table_ku_rows(book: Book, rows: list[BookKnowledgeUnit]) -> list[KnowledgeUnit]:
     annotated: list[KnowledgeUnit] = []
-    for ku in kus:
+    for row in rows:
+        ku = book_ku_to_knowledge_unit(row)
         payload = ku.model_dump()
         source_ref = {
             "book_id": str(book.id),
@@ -37,7 +27,7 @@ def annotate_source_kus(
             "author": book.author,
             "chapter_num": ku.source_chapter_num,
             "chunk_id": ku.source_chunk_id,
-            "skill_package_id": str(package.id) if package.id else None,
+            "skill_package_id": str(row.skill_package_id) if row.skill_package_id else None,
         }
         payload["source_book_id"] = str(book.id)
         payload["source_book_title"] = book.title
@@ -62,22 +52,13 @@ async def load_collection_with_books(
     return collection
 
 
-async def load_latest_book_kus(
+async def load_book_kus(
     db: AsyncSession,
     book: Book,
 ) -> list[KnowledgeUnit]:
-    stmt = (
-        select(SkillPackage)
-        .where(SkillPackage.book_id == book.id)
-        .where(SkillPackage.scripts.isnot(None))
-        .order_by(SkillPackage.created_at.desc())
-        .limit(1)
-    )
-    result = await db.execute(stmt)
-    package = result.scalar_one_or_none()
-    if not package:
-        raise MissingReusableKUsError(f"《{book.title or book.id}》没有可复用 KU，请先生成单书 skill")
-    kus = extract_kus_from_scripts(package.scripts)
-    if not kus:
-        raise MissingReusableKUsError(f"《{book.title or book.id}》没有可复用 KU")
-    return annotate_source_kus(book, package, kus)
+    rows = await load_book_knowledge_unit_rows(db, book.id)
+    if not rows:
+        raise MissingReusableKUsError(
+            f"《{book.title or book.id}》没有可复用 KU，请先提交或生成该书的 knowledge units"
+        )
+    return annotate_book_table_ku_rows(book, rows)

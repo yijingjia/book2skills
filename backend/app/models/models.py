@@ -27,6 +27,11 @@ class Book(Base):
 
     chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
     skill_packages: Mapped[list["SkillPackage"]] = relationship("SkillPackage", back_populates="book", cascade="all, delete-orphan")
+    knowledge_units: Mapped[list["BookKnowledgeUnit"]] = relationship(
+        "BookKnowledgeUnit",
+        back_populates="book",
+        cascade="all, delete-orphan",
+    )
     collection_memberships: Mapped[list["CollectionBook"]] = relationship(
         "CollectionBook",
         back_populates="book",
@@ -138,6 +143,35 @@ class SkillPackage(Base):
     book: Mapped["Book"] = relationship("Book", back_populates="skill_packages")
     conversations: Mapped[list["Conversation"]] = relationship("Conversation", back_populates="skill_package", cascade="all, delete-orphan")
     skills: Mapped[list["Skill"]] = relationship("Skill", back_populates="skill_package", cascade="all, delete-orphan")
+
+
+class BookKnowledgeUnit(Base):
+    __tablename__ = "book_knowledge_units"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    book_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("books.id", ondelete="CASCADE"),
+        index=True,
+    )
+    skill_package_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("skill_packages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_chunk_id: Mapped[str | None] = mapped_column(Text)
+    source_chapter_num: Mapped[int] = mapped_column(Integer)
+    source_quote: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[dict] = mapped_column(JSONB)
+    tags: Mapped[list] = mapped_column(JSONB, default=list)
+    generated_by: Mapped[str] = mapped_column(String(50))
+    generator_name: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    book: Mapped["Book"] = relationship("Book", back_populates="knowledge_units")
+    skill_package: Mapped["SkillPackage"] = relationship("SkillPackage")
 
 
 class Skill(Base):

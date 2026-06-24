@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
 
-from fastapi import HTTPException
 import pytest
+from fastapi import HTTPException
 
 from app.api.routes.collections import _ensure_collection_generateable
 from app.models.models import Book, Collection, CollectionBook

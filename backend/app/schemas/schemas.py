@@ -269,6 +269,29 @@ class KnowledgeUnit(BaseModel):
         return [str(item) for item in v]
 
 
+class AgentKnowledgeUnit(BaseModel):
+    source_chapter_num: int = Field(..., ge=1)
+    source_quote: str = Field(..., min_length=1)
+    source_chunk_id: str | None = None
+    principle: str | None = None
+    method: str | None = None
+    step_by_step: list[str] = Field(default_factory=list)
+    example: str | None = None
+    when_to_use: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_content(self) -> "AgentKnowledgeUnit":
+        if self.principle or self.method or self.example or self.step_by_step or self.when_to_use:
+            return self
+        raise ValueError("knowledge unit requires at least one content field")
+
+
+class AgentKnowledgeUnitIngestRequest(BaseModel):
+    knowledge_units: list[AgentKnowledgeUnit] = Field(..., min_length=1)
+    generator_name: str | None = None
+
+
 class SkillStep(BaseModel):
     """最终技能输出步骤"""
     step_num: int = Field(..., ge=1)

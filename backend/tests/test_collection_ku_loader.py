@@ -1,53 +1,43 @@
-import json
 import uuid
 
-import pytest
-
-from app.models.models import Book, SkillPackage
-from app.pipeline.collection_ku_loader import (
-    MissingReusableKUsError,
-    annotate_source_kus,
-    extract_kus_from_scripts,
-)
-from app.schemas.schemas import KnowledgeUnit
+from app.models.models import Book, BookKnowledgeUnit
+from app.pipeline.collection_ku_loader import annotate_book_table_ku_rows
 
 
-def make_book(title: str = "产品书") -> Book:
-    return Book(
+def test_annotate_book_table_ku_rows_adds_source_books_metadata():
+    book = Book(
         id=uuid.uuid4(),
-        title=title,
-        author="Author",
-        file_path=f"/tmp/{title}.epub",
-        file_type="epub",
-        status="ready",
+        title="底层逻辑",
+        author="刘润",
+        file_path="x",
+        file_type="pdf",
     )
+    package_id = uuid.uuid4()
+    rows = [
+        BookKnowledgeUnit(
+            id=uuid.uuid4(),
+            book_id=book.id,
+            skill_package_id=package_id,
+            source_chunk_id="book_ch1_0",
+            source_chapter_num=1,
+            source_quote="系统由要素、关系和目标构成。",
+            content={
+                "principle": "系统要看关系和目标。",
+                "method": "系统思维",
+                "step_by_step": ["看要素", "看关系"],
+                "example": None,
+                "when_to_use": ["复杂问题"],
+            },
+            tags=[],
+            generated_by="agent",
+            generator_name="codex",
+        )
+    ]
 
+    annotated = annotate_book_table_ku_rows(book, rows)
 
-def test_extract_kus_from_scripts_prefers_complete_json():
-    ku = KnowledgeUnit(source_chunk_id="c1", source_chapter_num=1, principle="验证需求")
-    scripts = {
-        "extracted_kus_partial.json": "[]",
-        "extracted_kus.json": json.dumps([ku.model_dump()], ensure_ascii=False),
-    }
-
-    result = extract_kus_from_scripts(scripts)
-
-    assert len(result) == 1
-    assert result[0].principle == "验证需求"
-
-
-def test_extract_kus_from_scripts_raises_when_missing():
-    with pytest.raises(MissingReusableKUsError):
-        extract_kus_from_scripts({"other.json": "[]"})
-
-
-def test_annotate_source_kus_adds_book_metadata():
-    book = make_book("产品书 A")
-    package = SkillPackage(book_id=book.id, scripts={})
-    ku = KnowledgeUnit(source_chunk_id="c1", source_chapter_num=3, principle="先访谈")
-
-    result = annotate_source_kus(book, package, [ku])
-
-    assert result[0].source_book_id == str(book.id)
-    assert result[0].source_book_title == "产品书 A"
-    assert result[0].source_books[0]["chapter_num"] == 3
+    assert annotated[0].source_book_id == str(book.id)
+    assert annotated[0].method == "系统思维"
+    assert annotated[0].source_books[0]["chapter_num"] == 1
+    assert annotated[0].source_books[0]["chunk_id"] == "book_ch1_0"
+    assert annotated[0].source_books[0]["skill_package_id"] == str(package_id)

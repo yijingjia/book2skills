@@ -504,6 +504,24 @@ def test_knowledge_unit_normalizes_scalar_text_fields():
     assert ku.example == "例子一\n例子二"
 
 
+def test_knowledge_units_to_store_items_keeps_llm_kus_without_source_quote():
+    from app.schemas.schemas import KnowledgeUnit
+    from app.tasks.generate_skill import _knowledge_units_to_store_items
+
+    ku = KnowledgeUnit(
+        source_chunk_id="book_ch1_0",
+        source_chapter_num=1,
+        principle="系统要看关系。",
+        example="书中用企业协作作为例子。",
+    )
+
+    items = _knowledge_units_to_store_items([ku])
+
+    assert items[0]["ku"] == ku
+    assert items[0]["source_quote"] is None
+    assert items[0]["tags"] == []
+
+
 @pytest.mark.asyncio
 async def test_extractor_preserves_ku_with_list_example():
     from app.pipeline.extractor import KnowledgeExtractor

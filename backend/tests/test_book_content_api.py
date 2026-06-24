@@ -5,12 +5,15 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes.books import (
+    _agent_ku_to_store_item,
     _build_book_content_response,
     _load_references_index,
     _read_reference_chapter,
     _references_dir,
+    _validate_agent_ku_chapters,
 )
 from app.models.models import Book
+from app.schemas.schemas import AgentKnowledgeUnit
 
 
 def make_book(book_id: uuid.UUID, status: str = "ready") -> Book:
@@ -122,3 +125,38 @@ def test_build_book_content_response_full_mode_includes_all_bodies(tmp_path):
     response = _build_book_content_response(book, ref_dir, mode="full", chapter_num=None)
 
     assert [chapter.content for chapter in response.chapters] == ["# One\n\nfull one", "# Two\n\nfull two"]
+
+
+def test_validate_agent_ku_chapters_accepts_existing_chapter():
+    _validate_agent_ku_chapters(
+        [AgentKnowledgeUnit(source_chapter_num=1, source_quote="原文", principle="原则")],
+        {1, 2},
+    )
+
+
+def test_validate_agent_ku_chapters_rejects_missing_chapter():
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_agent_ku_chapters(
+            [AgentKnowledgeUnit(source_chapter_num=9, source_quote="原文", principle="原则")],
+            {1, 2},
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_agent_ku_to_store_item_builds_pipeline_ku_and_quote():
+    item = _agent_ku_to_store_item(
+        book_id="book-1",
+        index=0,
+        unit=AgentKnowledgeUnit(
+            source_chapter_num=3,
+            source_quote="复利不是利息，而是增长结构。",
+            principle="复利来自持续积累。",
+            tags=["复利"],
+        ),
+    )
+
+    assert item["source_quote"] == "复利不是利息，而是增长结构。"
+    assert item["tags"] == ["复利"]
+    assert item["ku"].source_chunk_id == "book-1_ch3_agent_0001"
+    assert item["ku"].principle == "复利来自持续积累。"
