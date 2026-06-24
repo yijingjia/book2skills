@@ -122,7 +122,7 @@ async def skill_playground(
     target_book_id = str(skill.book_id) if skill.book_id else None
     retrieved_skills = await retriever.retrieve(
         query=search_query,
-        top_k=8,
+        top_k=settings.SKILL_RETRIEVAL_TOP_K,
         book_id=target_book_id
     )
 

@@ -4,6 +4,7 @@
 """
 from collections.abc import AsyncGenerator
 
+from app.core.config import settings
 from app.core.llm import get_chat_model, get_llm_client
 from app.core.retry import llm_retry
 from app.pipeline.retriever import RAGRetriever
@@ -92,7 +93,7 @@ class SkillRefiner:
         return await self.retriever.retrieve_hybrid(
             query=query,
             book_id=book_id,
-            top_k=8,
+            top_k=settings.RETRIEVAL_TOP_K,
         )
 
     @llm_retry

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     RETRIEVAL_TOP_K: int = 5  # Final results returned to the caller
     RETRIEVAL_CANDIDATE_K: int = 50  # Wide candidate pool for hybrid search before reranking
     RETRIEVAL_MIN_SCORE: float = 0.0
+    SKILL_RETRIEVAL_TOP_K: int = 8  # Final skill modules returned for playground/refinement
     # Hybrid search tuning
     RETRIEVAL_VECTOR_WEIGHT: float = 0.6  # Vector similarity weight in BM25 hybrid scoring
     RETRIEVAL_BM25_WEIGHT: float = 0.4  # BM25 keyword weight in BM25 hybrid scoring

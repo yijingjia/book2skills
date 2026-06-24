@@ -26,6 +26,7 @@ DEFAULT_RETRIEVAL_BM25_WEIGHT = getattr(settings, "RETRIEVAL_BM25_WEIGHT", 0.4)
 DEFAULT_RETRIEVAL_QUERY_EXPANSION_N = getattr(
     settings, "RETRIEVAL_QUERY_EXPANSION_N", 3
 )
+DEFAULT_SKILL_RETRIEVAL_TOP_K = getattr(settings, "SKILL_RETRIEVAL_TOP_K", 8)
 
 
 class LowConfidenceError(Exception):
@@ -373,7 +374,7 @@ class SkillRetriever:
     async def retrieve(
         self,
         query: str,
-        top_k: int = 8,
+        top_k: int = DEFAULT_SKILL_RETRIEVAL_TOP_K,
         book_id: str | None = None,
     ) -> list[RetrievedSkill]:
         """
