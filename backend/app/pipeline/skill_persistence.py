@@ -87,6 +87,16 @@ async def build_extracted_kus_export(db: AsyncSession, book_id: uuid.UUID) -> di
             "source_chapter_num": row.source_chapter_num,
             "source_quote": row.source_quote,
             "content": row.content or {},
+            "source_books": [
+                {
+                    "book_id": str(row.book_id),
+                    "title": None,
+                    "author": None,
+                    "chapter_num": row.source_chapter_num,
+                    "chunk_id": row.source_chunk_id,
+                    "skill_package_id": str(row.skill_package_id) if row.skill_package_id else None,
+                }
+            ],
             "tags": row.tags or [],
             "generated_by": row.generated_by,
             "generator_name": row.generator_name,

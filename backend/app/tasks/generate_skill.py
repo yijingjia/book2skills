@@ -24,6 +24,36 @@ def _knowledge_units_to_store_items(kus: list[KnowledgeUnit]) -> list[dict]:
     return [{"ku": ku, "source_quote": None, "tags": []} for ku in kus]
 
 
+def _knowledge_units_to_export_object(book_id: str, kus: list[KnowledgeUnit]) -> dict:
+    return {
+        "book_id": book_id,
+        "knowledge_units_count": len(kus),
+        "knowledge_units": [
+            {
+                "id": None,
+                "book_id": book_id,
+                "skill_package_id": None,
+                "source_chunk_id": ku.source_chunk_id,
+                "source_chapter_num": ku.source_chapter_num,
+                "source_quote": None,
+                "content": {
+                    "principle": ku.principle,
+                    "method": ku.method,
+                    "step_by_step": ku.step_by_step,
+                    "example": ku.example,
+                    "when_to_use": ku.when_to_use,
+                },
+                "source_books": ku.source_books,
+                "tags": [],
+                "generated_by": "llm",
+                "generator_name": None,
+                "created_at": None,
+            }
+            for ku in kus
+        ],
+    }
+
+
 @celery_app.task(bind=True, max_retries=2)
 def generate_skill_task(
     self,
@@ -168,15 +198,13 @@ async def _generate_skill_async(
                         "未提取到任何有价值的 Knowledge Unit，生成失败。"
                     )
 
-            # 立即序列化 kus 备用，以防后续崩溃时可降级保存
-            kus_json_str = json.dumps(
-                [ku.model_dump() for ku in kus], ensure_ascii=False, indent=2
-            )
+            # 立即构建 kus 导出对象备用，以防后续崩溃时可降级保存
+            kus_export = _knowledge_units_to_export_object(book_id, kus)
             # Save checkpoint right after KU extraction/reuse so the next run can skip Phase 1/2.
             current_phase = "phase2_checkpoint_persist"
             skill.scripts = {
                 **(skill.scripts or {}),
-                "extracted_kus_partial.json": kus_json_str,
+                "extracted_kus_partial.json": kus_export,
                 "pipeline_phase": "phase2_completed",
             }
             await db.commit()
@@ -262,7 +290,7 @@ async def _generate_skill_async(
                 "failed_themes": failed_skills,
             }
             scripts_dict = {
-                "extracted_kus.json": kus_json_str,
+                "extracted_kus.json": kus_export,
                 "generation_report.json": json.dumps(
                     generation_report, ensure_ascii=False, indent=2
                 ),
@@ -376,12 +404,9 @@ async def _generate_skill_async(
             # 尽最大努力保存已提取的中间 KU 资产
             if kus:
                 try:
-                    fallback_json = json.dumps(
-                        [ku.model_dump() for ku in kus], ensure_ascii=False, indent=2
-                    )
                     skill.scripts = {
                         **(skill.scripts or {}),
-                        "extracted_kus_partial.json": fallback_json,
+                        "extracted_kus_partial.json": _knowledge_units_to_export_object(book_id, kus),
                     }
                     skill.skill_md = (
                         f"# ⚠️ 生成中断报告\n\n"

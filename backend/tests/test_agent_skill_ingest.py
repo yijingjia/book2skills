@@ -217,7 +217,18 @@ async def test_persist_agent_skill_package_marks_indexed_on_success():
     assert package.status == "ready"
     assert package.scripts["metadata"]["vector_index_status"] == "indexed"
     assert package.scripts["extracted_kus.json"]["knowledge_units_count"] == 1
-    assert package.scripts["extracted_kus.json"]["knowledge_units"][0]["source_quote"] == "先确认问题是否真实存在。"
+    exported_ku = package.scripts["extracted_kus.json"]["knowledge_units"][0]
+    assert exported_ku["source_quote"] == "先确认问题是否真实存在。"
+    assert exported_ku["source_books"] == [
+        {
+            "book_id": str(book_id),
+            "title": None,
+            "author": None,
+            "chapter_num": 1,
+            "chunk_id": f"{book_id}_ch1_agent_0001",
+            "skill_package_id": None,
+        }
+    ]
     assert len(db.added) == 2
     assert db.commit.await_count == 2
     upsert.assert_awaited_once()
@@ -290,3 +301,35 @@ async def test_persist_agent_skill_package_rolls_back_on_db_error():
     db.rollback.assert_awaited_once()
     db.commit.assert_not_awaited()
     upsert.assert_not_awaited()
+
+
+async def test_build_extracted_kus_export_serializes_rows():
+    from app.pipeline.skill_persistence import build_extracted_kus_export
+
+    book_id = uuid.uuid4()
+    row = FakeKnowledgeUnitRow(book_id)
+
+    with patch(
+        "app.pipeline.skill_persistence.load_book_knowledge_unit_rows",
+        new=AsyncMock(return_value=[row]),
+    ):
+        result = await build_extracted_kus_export(FakeAsyncSession(), book_id)
+
+    row = result["knowledge_units"][0]
+    assert result["book_id"] == str(book_id)
+    assert result["knowledge_units_count"] == 1
+    assert row["id"] is not None
+    assert row["book_id"] == str(book_id)
+    assert row["source_quote"] == "先确认问题是否真实存在。"
+    assert row["content"]["principle"] == "先验证问题真实性"
+    assert row["source_books"] == [
+        {
+            "book_id": str(book_id),
+            "title": None,
+            "author": None,
+            "chapter_num": 1,
+            "chunk_id": f"{book_id}_ch1_agent_0001",
+            "skill_package_id": None,
+        }
+    ]
+    assert row["generated_by"] == "agent"

@@ -1033,3 +1033,40 @@ class TestAssetGenerator:
             assert "valid.py" in scripts
             assert "invalid.py" not in scripts  # 应该因为 AST 解析失败被丢弃
             assert len(templates) == 0
+
+
+def test_knowledge_units_to_export_object_is_structured():
+    from app.schemas.schemas import KnowledgeUnit
+    from app.tasks.generate_skill import _knowledge_units_to_export_object
+
+    kus = [
+        KnowledgeUnit(
+            source_chunk_id="book_ch1_0",
+            source_chapter_num=1,
+            principle="原则",
+            method="方法",
+            step_by_step=["第一步"],
+            example=None,
+            when_to_use=["场景"],
+            source_book_id=None,
+            source_book_title=None,
+            source_book_author=None,
+        )
+    ]
+
+    result = _knowledge_units_to_export_object("book-1", kus)
+
+    row = result["knowledge_units"][0]
+    assert result["book_id"] == "book-1"
+    assert result["knowledge_units_count"] == 1
+    assert row["id"] is None
+    assert row["book_id"] == "book-1"
+    assert row["skill_package_id"] is None
+    assert row["source_chunk_id"] == "book_ch1_0"
+    assert row["source_quote"] is None
+    assert row["content"]["principle"] == "原则"
+    assert row["source_books"] == []
+    assert row["tags"] == []
+    assert row["generated_by"] == "llm"
+    assert row["generator_name"] is None
+    assert row["created_at"] is None
