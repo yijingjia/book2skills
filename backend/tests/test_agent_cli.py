@@ -35,6 +35,54 @@ class FakeClient:
         self.calls.append(("ingest_knowledge_units", book_id, payload))
         return {"book_id": book_id, "knowledge_units_count": 1, "status": "ready"}
 
+    def list_collections(self):
+        self.calls.append(("list_collections",))
+        return [{"id": "collection-1", "name": "认知合集", "book_count": 2, "status": "draft"}]
+
+    def create_collection(self, name: str, book_ids: list[str], description=None):
+        self.calls.append(("create_collection", name, book_ids, description))
+        return {"id": "collection-1", "name": name}
+
+    def get_collection(self, collection_id: str):
+        self.calls.append(("get_collection", collection_id))
+        return {"id": collection_id, "name": "认知合集"}
+
+    def generate_collection_skill(
+        self,
+        collection_id: str,
+        user_goal=None,
+        reuse_extracted_kus=True,
+        detect_conflicts=True,
+    ):
+        self.calls.append(("generate_collection_skill", collection_id, user_goal, reuse_extracted_kus, detect_conflicts))
+        return {"id": "run-1", "collection_id": collection_id, "status": "generating"}
+
+    def list_collection_skills(self, collection_id: str):
+        self.calls.append(("list_collection_skills", collection_id))
+        return [{"id": "run-1", "status": "ready", "pipeline_phase": "completed"}]
+
+    def get_collection_skill(self, skill_id: str):
+        self.calls.append(("get_collection_skill", skill_id))
+        return {"id": skill_id, "status": "ready"}
+
+    def wait_collection_skill_ready(self, skill_id: str, timeout_seconds=3600, interval_seconds=5):
+        self.calls.append(("wait_collection_skill_ready", skill_id, timeout_seconds, interval_seconds))
+        return {"id": skill_id, "status": "ready"}
+
+    def pack_collection_skill(self, skill_id: str):
+        self.calls.append(("pack_collection_skill", skill_id))
+        return {"skill_package_id": skill_id, "zip_path": "/tmp/skills.zip"}
+
+    def retry_collection_skill(self, skill_id: str, user_goal=None, detect_conflicts=True):
+        self.calls.append(("retry_collection_skill", skill_id, user_goal, detect_conflicts))
+        return {"id": "run-2", "collection_id": "collection-1", "status": "generating"}
+
+    def download_collection_skill(self, skill_id: str, output_path: Path):
+        self.calls.append(("download_collection_skill", skill_id, output_path))
+        output_path.write_bytes(b"zip")
+        return {"path": str(output_path), "bytes": 3}
+
+
 
 def valid_skill_payload():
     return {
@@ -202,3 +250,83 @@ def test_ingest_knowledge_units_reads_json_file(tmp_path, monkeypatch, capsys):
         )
     ]
     assert "knowledge_units_count" in captured.out
+
+
+def test_cli_create_collection_outputs_response(monkeypatch, capsys):
+    from app.agent_client import cli
+
+    fake = FakeClient()
+    monkeypatch.setattr(cli, "make_client", lambda: fake)
+
+    code = cli.main([
+        "create-collection",
+        "--name",
+        "认知合集",
+        "--description",
+        "两本书",
+        "book-a",
+        "book-b",
+    ])
+
+    assert code == 0
+    assert fake.calls == [("create_collection", "认知合集", ["book-a", "book-b"], "两本书")]
+    assert "collection-1" in capsys.readouterr().out
+
+
+def test_cli_generate_collection_can_wait(monkeypatch, capsys):
+    from app.agent_client import cli
+
+    fake = FakeClient()
+    monkeypatch.setattr(cli, "make_client", lambda: fake)
+
+    code = cli.main([
+        "generate-collection",
+        "collection-1",
+        "--goal",
+        "提炼领域方法论",
+        "--wait",
+        "--interval",
+        "0",
+    ])
+
+    assert code == 0
+    assert fake.calls == [
+        ("generate_collection_skill", "collection-1", "提炼领域方法论", True, True),
+        ("wait_collection_skill_ready", "run-1", 3600, 0),
+    ]
+    assert "ready" in capsys.readouterr().out
+
+
+def test_cli_download_collection_skill_writes_to_output(monkeypatch, tmp_path, capsys):
+    from app.agent_client import cli
+
+    fake = FakeClient()
+    monkeypatch.setattr(cli, "make_client", lambda: fake)
+    output = tmp_path / "skills.zip"
+
+    code = cli.main(["download-collection-skill", "run-1", str(output)])
+
+    assert code == 0
+    assert fake.calls == [("download_collection_skill", "run-1", output)]
+    assert output.read_bytes() == b"zip"
+    assert str(output) in capsys.readouterr().out
+
+
+def test_cli_retry_collection_skill_outputs_new_run(monkeypatch, capsys):
+    from app.agent_client import cli
+
+    fake = FakeClient()
+    monkeypatch.setattr(cli, "make_client", lambda: fake)
+
+    code = cli.main([
+        "retry-collection-skill",
+        "run-1",
+        "--goal",
+        "换个生成目标",
+        "--no-detect-conflicts",
+    ])
+
+    assert code == 0
+    assert fake.calls == [("retry_collection_skill", "run-1", "换个生成目标", False)]
+    assert "run-2" in capsys.readouterr().out
+

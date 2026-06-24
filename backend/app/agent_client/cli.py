@@ -130,6 +130,49 @@ def build_parser() -> argparse.ArgumentParser:
     ku_parser.add_argument("payload", help="Path to KU JSON payload, or '-' for stdin")
     ku_parser.add_argument("--format", choices=["pretty", "json"], default="pretty")
 
+    list_collections_parser = subparsers.add_parser("list-collections")
+    list_collections_parser.add_argument("--format", choices=["pretty", "json"], default="pretty")
+
+    create_collection_parser = subparsers.add_parser("create-collection")
+    create_collection_parser.add_argument("--name", required=True)
+    create_collection_parser.add_argument("--description")
+    create_collection_parser.add_argument("book_ids", nargs="+")
+
+    get_collection_parser = subparsers.add_parser("get-collection")
+    get_collection_parser.add_argument("collection_id")
+
+    generate_collection_parser = subparsers.add_parser("generate-collection")
+    generate_collection_parser.add_argument("collection_id")
+    generate_collection_parser.add_argument("--goal")
+    generate_collection_parser.add_argument("--no-detect-conflicts", action="store_true")
+    generate_collection_parser.add_argument("--wait", action="store_true")
+    generate_collection_parser.add_argument("--timeout", type=int, default=3600)
+    generate_collection_parser.add_argument("--interval", type=int, default=5)
+
+    collection_runs_parser = subparsers.add_parser("list-collection-runs")
+    collection_runs_parser.add_argument("collection_id")
+    collection_runs_parser.add_argument("--format", choices=["pretty", "json"], default="pretty")
+
+    collection_skill_parser = subparsers.add_parser("get-collection-skill")
+    collection_skill_parser.add_argument("skill_id")
+
+    wait_collection_skill_parser = subparsers.add_parser("wait-collection-skill")
+    wait_collection_skill_parser.add_argument("skill_id")
+    wait_collection_skill_parser.add_argument("--timeout", type=int, default=3600)
+    wait_collection_skill_parser.add_argument("--interval", type=int, default=5)
+
+    pack_collection_skill_parser = subparsers.add_parser("pack-collection-skill")
+    pack_collection_skill_parser.add_argument("skill_id")
+
+    retry_collection_skill_parser = subparsers.add_parser("retry-collection-skill")
+    retry_collection_skill_parser.add_argument("skill_id")
+    retry_collection_skill_parser.add_argument("--goal")
+    retry_collection_skill_parser.add_argument("--no-detect-conflicts", action="store_true")
+
+    download_collection_skill_parser = subparsers.add_parser("download-collection-skill")
+    download_collection_skill_parser.add_argument("skill_id")
+    download_collection_skill_parser.add_argument("output", type=Path)
+
     return parser
 
 
@@ -209,6 +252,94 @@ def main(argv: list[str] | None = None) -> int:
                 _print_json(result)
             else:
                 _print_pretty_mapping(result)
+            return 0
+
+        if args.command == "list-collections":
+            collections = client.list_collections()
+            if args.format == "json":
+                _print_json(collections)
+            else:
+                for collection in collections:
+                    print(
+                        f"{collection.get('id')}\t{collection.get('book_count', '-')}\t"
+                        f"{collection.get('status', '-')}\t{collection.get('name')}"
+                    )
+            return 0
+
+        if args.command == "create-collection":
+            if len(args.book_ids) < 2:
+                raise SystemExit("create-collection requires at least two book ids")
+            result = client.create_collection(
+                name=args.name,
+                description=args.description,
+                book_ids=args.book_ids,
+            )
+            _print_json(result)
+            return 0
+
+        if args.command == "get-collection":
+            _print_json(client.get_collection(args.collection_id))
+            return 0
+
+        if args.command == "generate-collection":
+            result = client.generate_collection_skill(
+                args.collection_id,
+                user_goal=args.goal,
+                reuse_extracted_kus=True,
+                detect_conflicts=not args.no_detect_conflicts,
+            )
+            if args.wait and result.get("id"):
+                result = client.wait_collection_skill_ready(
+                    result["id"],
+                    timeout_seconds=args.timeout,
+                    interval_seconds=args.interval,
+                )
+            _print_json(result)
+            return 0
+
+        if args.command == "list-collection-runs":
+            runs = client.list_collection_skills(args.collection_id)
+            if args.format == "json":
+                _print_json(runs)
+            else:
+                for run in runs:
+                    print(
+                        f"{run.get('id')}\t{run.get('status')}\t"
+                        f"{run.get('pipeline_phase', '-')}\t{run.get('created_at', '-')}"
+                    )
+            return 0
+
+        if args.command == "get-collection-skill":
+            _print_json(client.get_collection_skill(args.skill_id))
+            return 0
+
+        if args.command == "wait-collection-skill":
+            _print_json(
+                client.wait_collection_skill_ready(
+                    args.skill_id,
+                    timeout_seconds=args.timeout,
+                    interval_seconds=args.interval,
+                )
+            )
+            return 0
+
+        if args.command == "pack-collection-skill":
+            _print_json(client.pack_collection_skill(args.skill_id))
+            return 0
+
+        if args.command == "retry-collection-skill":
+            _print_json(
+                client.retry_collection_skill(
+                    args.skill_id,
+                    user_goal=args.goal,
+                    detect_conflicts=not args.no_detect_conflicts,
+                )
+            )
+            return 0
+
+        if args.command == "download-collection-skill":
+            result = client.download_collection_skill(args.skill_id, args.output)
+            _print_json(result)
             return 0
     finally:
         close = getattr(client, "close", None)
