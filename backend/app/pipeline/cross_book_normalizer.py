@@ -101,7 +101,8 @@ def _dedupe_source_books(kus: list[KnowledgeUnit]) -> list[dict[str, Any]]:
     result = []
     for ku in kus:
         for source in ku.source_books or []:
-            key = (source.get("book_id"), source.get("chapter_num"), source.get("chunk_id"))
+            book_id = str(source.get("book_id")) if source.get("book_id") else None
+            key = (book_id, source.get("chapter_num"), source.get("chunk_id"))
             if key in seen:
                 continue
             seen.add(key)
@@ -213,6 +214,8 @@ def build_normalization_result_from_candidates(
     judgments: dict[str, list[dict[str, Any]]],
 ) -> CrossBookNormalizationResult:
     """Build normalization artifacts from candidate pairs plus external judgments."""
+    if judgments is None:
+        judgments = {}
     if not kus:
         return CrossBookNormalizationResult(
             source_kus={"knowledge_units": []},
@@ -247,13 +250,18 @@ def build_normalization_result_from_candidates(
         assert key is not None
         pair = candidate_by_key[key]
         edge_type = "same_as" if judgment.get("decision") == "same_as" else "alias_of"
+        raw_conf = judgment.get("confidence")
+        try:
+            confidence = float(raw_conf) if raw_conf is not None else float(pair.get("similarity", 0.0))
+        except (TypeError, ValueError):
+            confidence = float(pair.get("similarity", 0.0))
         edges.append(
             {
                 "edge_id": f"{edge_type}-{key[0]}-{key[1]}",
                 "edge_type": edge_type,
                 "from_ku_id": key[0],
                 "to_ku_id": key[1],
-                "confidence": float(judgment.get("confidence", pair.get("similarity", 0.0))),
+                "confidence": confidence,
                 "evidence": judgment.get("evidence") or "same_as_judge",
                 "status": "confirmed",
                 "review_required": False,

@@ -420,3 +420,104 @@ def test_build_normalization_result_from_candidates_deduplicates_judgments():
     # Check that it kept the first one (confidence 0.86)
     assert result.same_as_edges["edges"][0]["confidence"] == 0.86
 
+
+def test_build_normalization_result_from_candidates_handles_null_judgments():
+    from app.pipeline.cross_book_normalizer import build_normalization_result_from_candidates
+    kus = [_source_ku("ku-0000", "book-a", "费曼技巧")["ku"]]
+    source_kus = [_source_ku("ku-0000", "book-a", "费曼技巧")]
+    candidates = {"pairs": []}
+
+    result = build_normalization_result_from_candidates(
+        kus=kus,
+        source_kus=source_kus,
+        candidates=candidates,
+        judgments=None,
+    )
+    assert result.same_as_judgments == {"judgments": []}
+    assert len(result.same_as_edges["edges"]) == 0
+
+
+def test_build_normalization_result_from_candidates_handles_invalid_or_missing_confidence():
+    from app.pipeline.cross_book_normalizer import build_normalization_result_from_candidates
+    kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧")["ku"],
+        _source_ku("ku-0001", "book-b", "打好比方的方法")["ku"],
+    ]
+    source_kus = [
+        _source_ku("ku-0000", "book-a", "费曼技巧"),
+        _source_ku("ku-0001", "book-b", "打好比方的方法"),
+    ]
+    candidates = {
+        "pairs": [
+            {
+                "candidate_id": "cand-ku-0000-ku-0001",
+                "from_ku_id": "ku-0000",
+                "to_ku_id": "ku-0001",
+                "similarity": 0.56,
+                "source_book_ids": ["book-a", "book-b"],
+            }
+        ]
+    }
+
+    # judgment with missing, None, and non-numeric confidence
+    for raw_conf in [None, "invalid", "0.75"]:
+        judgments = {
+            "judgments": [
+                {
+                    "candidate_id": "cand-ku-0000-ku-0001",
+                    "from_ku_id": "ku-0000",
+                    "to_ku_id": "ku-0001",
+                    "decision": "same_as",
+                    "confidence": raw_conf,
+                }
+            ]
+        }
+        result = build_normalization_result_from_candidates(
+            kus=kus,
+            source_kus=source_kus,
+            candidates=candidates,
+            judgments=judgments,
+        )
+        assert len(result.same_as_edges["edges"]) == 1
+        edge = result.same_as_edges["edges"][0]
+        if raw_conf == "0.75":
+            assert edge["confidence"] == 0.75
+        else:
+            assert edge["confidence"] == 0.56  # fallback to similarity
+
+
+def test_dedupe_source_books_coerces_book_id_to_str():
+    from app.pipeline.cross_book_normalizer import _dedupe_source_books
+    from app.schemas.schemas import KnowledgeUnit
+
+    # Create KUs where source_books contain int/string mix of book_id
+    ku1 = KnowledgeUnit(
+        source_chunk_id="c1",
+        source_chapter_num=1,
+        source_book_id="123",
+        source_books=[
+            {
+                "book_id": 123,  # integer book_id
+                "chapter_num": 1,
+                "chunk_id": "c1",
+            }
+        ],
+    )
+    ku2 = KnowledgeUnit(
+        source_chunk_id="c1",
+        source_chapter_num=1,
+        source_book_id="123",
+        source_books=[
+            {
+                "book_id": "123",  # string book_id
+                "chapter_num": 1,
+                "chunk_id": "c1",
+            }
+        ],
+    )
+
+    deduped = _dedupe_source_books([ku1, ku2])
+    # Should only keep 1 source book, since 123 and "123" are treated as the same
+    assert len(deduped) == 1
+    assert str(deduped[0]["book_id"]) == "123"
+
