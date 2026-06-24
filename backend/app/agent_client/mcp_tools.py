@@ -86,3 +86,100 @@ def ingest_knowledge_units_tool(
     payload: dict,
 ) -> dict:
     return client.ingest_knowledge_units(book_id, payload)
+
+
+def list_collections_tool(client: Book2SkillsAgentClient) -> dict:
+    return {"collections": client.list_collections()}
+
+
+def create_collection_tool(
+    client: Book2SkillsAgentClient,
+    name: str,
+    book_ids: list[str],
+    description: str | None = None,
+) -> dict:
+    if len(book_ids) < 2:
+        raise ValueError("collection requires at least two books")
+    if len(set(book_ids)) != len(book_ids):
+        raise ValueError("book_ids must be unique")
+    return client.create_collection(name=name, book_ids=book_ids, description=description)
+
+
+def get_collection_tool(client: Book2SkillsAgentClient, collection_id: str) -> dict:
+    return client.get_collection(collection_id)
+
+
+def generate_collection_skill_tool(
+    client: Book2SkillsAgentClient,
+    collection_id: str,
+    user_goal: str | None = None,
+    detect_conflicts: bool = True,
+    wait: bool = False,
+    timeout_seconds: int = 3600,
+    interval_seconds: int = 5,
+) -> dict:
+    result = client.generate_collection_skill(
+        collection_id,
+        user_goal=user_goal,
+        reuse_extracted_kus=True,
+        detect_conflicts=detect_conflicts,
+    )
+    skill_id = result.get("id")
+    if wait and skill_id:
+        return client.wait_collection_skill_ready(
+            skill_id,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=interval_seconds,
+        )
+    return result
+
+
+def list_collection_skills_tool(client: Book2SkillsAgentClient, collection_id: str) -> dict:
+    return {"runs": client.list_collection_skills(collection_id)}
+
+
+def get_collection_skill_tool(client: Book2SkillsAgentClient, skill_id: str) -> dict:
+    return client.get_collection_skill(skill_id)
+
+
+def wait_collection_skill_ready_tool(
+    client: Book2SkillsAgentClient,
+    skill_id: str,
+    timeout_seconds: int = 3600,
+    interval_seconds: int = 5,
+) -> dict:
+    return client.wait_collection_skill_ready(
+        skill_id,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
+    )
+
+
+def pack_collection_skill_tool(client: Book2SkillsAgentClient, skill_id: str) -> dict:
+    return client.pack_collection_skill(skill_id)
+
+
+def retry_collection_skill_tool(
+    client: Book2SkillsAgentClient,
+    skill_id: str,
+    user_goal: str | None = None,
+    detect_conflicts: bool = True,
+) -> dict:
+    return client.retry_collection_skill(
+        skill_id,
+        user_goal=user_goal,
+        detect_conflicts=detect_conflicts,
+    )
+
+
+def download_collection_skill_tool(
+    client: Book2SkillsAgentClient,
+    skill_id: str,
+    output_path: str,
+) -> dict:
+    path = Path(output_path)
+    if not path.is_absolute():
+        raise ValueError("output_path must be absolute")
+    if path.exists() and path.is_dir():
+        raise IsADirectoryError(path)
+    return client.download_collection_skill(skill_id, path)
