@@ -12,6 +12,10 @@ def _zip_content(content):
     return content
 
 
+class MissingReferencesError(FileNotFoundError):
+    pass
+
+
 class SkillPacker:
     """将 SKILL.md、scripts/、references/、templates/ 打包为 skills.zip"""
 
@@ -23,6 +27,7 @@ class SkillPacker:
         templates: dict | None,
         output_path: str,
         book_title: str,
+        require_references: bool = False,
     ) -> str:
         """
         打包 skills.zip。
@@ -40,6 +45,9 @@ class SkillPacker:
         """
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
+        ref_path = Path(references_dir) / "references"
+        if require_references and not ref_path.exists():
+            raise MissingReferencesError(f"references directory not found: {ref_path}")
 
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
             # 1. 解析 skill_md 提取出 Router 的部分
@@ -49,7 +57,6 @@ class SkillPacker:
             zf.writestr("SKILL.md", master_router_md)
 
             # 2. references/
-            ref_path = Path(references_dir) / "references"
             if ref_path.exists():
                 for file in ref_path.rglob("*"):
                     if file.is_file():

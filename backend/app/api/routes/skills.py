@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import Book, SkillPackage
-from app.pipeline.packer import SkillPacker
+from app.pipeline.packer import MissingReferencesError, SkillPacker
 from app.schemas.schemas import GenerateSkillRequest, PackResponse, SkillPackageResponse
 from app.tasks.generate_skill import generate_skill_task
 
@@ -95,14 +95,24 @@ async def pack_skill(skill_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     book = await db.get(Book, skill.book_id)
     book_title = book.title if book else "未知书籍"
 
-    zip_path_str = packer.pack(
-        skill_md=skill.skill_md or "",
-        references_dir=str(storage_dir),
-        scripts=skill.scripts,
-        templates=skill.templates,
-        output_path=str(zip_path),
-        book_title=book_title,
-    )
+    try:
+        zip_path_str = packer.pack(
+            skill_md=skill.skill_md or "",
+            references_dir=str(storage_dir),
+            scripts=skill.scripts,
+            templates=skill.templates,
+            output_path=str(zip_path),
+            book_title=book_title,
+            require_references=True,
+        )
+    except MissingReferencesError as exc:
+        raise HTTPException(
+            500,
+            detail=(
+                "技能包 references 缺失，请确认 STORAGE_LOCAL_PATH "
+                f"指向书籍处理时使用的同一 storage root：{exc}"
+            ),
+        ) from exc
 
     skill.zip_path = zip_path_str
     await db.commit()
