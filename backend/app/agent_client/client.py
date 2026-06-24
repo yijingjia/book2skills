@@ -117,3 +117,6 @@ class Book2SkillsAgentClient:
 
     def ingest_skill(self, book_id: str, payload: dict) -> dict:
         return dict(self._request("POST", f"/api/books/{book_id}/skills", json=payload))
+
+    def ingest_knowledge_units(self, book_id: str, payload: dict) -> dict:
+        return dict(self._request("POST", f"/api/books/{book_id}/knowledge-units", json=payload))

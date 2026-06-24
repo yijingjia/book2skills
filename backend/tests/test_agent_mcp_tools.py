@@ -34,6 +34,10 @@ class FakeClient:
         self.calls.append(("ingest_skill", book_id, payload))
         return {"id": "pkg-1", "status": "ready"}
 
+    def ingest_knowledge_units(self, book_id: str, payload: dict):
+        self.calls.append(("ingest_knowledge_units", book_id, payload))
+        return {"book_id": book_id, "knowledge_units_count": 1, "status": "ready"}
+
 
 def test_list_books_tool_calls_client():
     client = FakeClient()
@@ -94,8 +98,26 @@ def test_ingest_tool_passes_payload_unchanged():
     assert client.calls == [("ingest_skill", "book-1", payload)]
 
 
+def test_ingest_knowledge_units_tool_passes_payload_unchanged():
+    client = FakeClient()
+    payload = {"knowledge_units": [{"source_chapter_num": 1, "source_quote": "原文", "principle": "原则"}]}
+
+    result = mcp_tools.ingest_knowledge_units_tool(client, "book-1", payload)
+
+    assert result["knowledge_units_count"] == 1
+    assert client.calls == [("ingest_knowledge_units", "book-1", payload)]
+
+
 def test_schema_tool_matches_cli_schema():
     result = mcp_tools.get_agent_skill_schema_tool()
 
     assert "payload_schema" in result
     assert "skills" in json.dumps(result["payload_schema"])
+
+
+def test_knowledge_unit_schema_tool_matches_cli_schema():
+    result = mcp_tools.get_knowledge_unit_schema_tool()
+
+    assert "payload_schema" in result
+    assert "knowledge_units" in json.dumps(result["payload_schema"])
+    assert "source_quote" in json.dumps(result["payload_schema"])

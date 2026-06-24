@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.agent_client.client import Book2SkillsAgentClient
 from app.agent_client.types import AgentClientConfig
-from app.schemas.schemas import AgentSkillIngestRequest
+from app.schemas.schemas import AgentKnowledgeUnitIngestRequest, AgentSkillIngestRequest
 
 
 def make_client() -> Book2SkillsAgentClient:
@@ -34,6 +34,18 @@ def agent_skill_schema_payload() -> dict[str, Any]:
     }
 
 
+def knowledge_unit_schema_payload() -> dict[str, Any]:
+    return {
+        "payload_schema": AgentKnowledgeUnitIngestRequest.model_json_schema(),
+        "instructions": [
+            "Read all relevant book chapters before creating this payload.",
+            "Accumulate book-level knowledge units and submit them once per book.",
+            "Every knowledge unit must include a non-empty source_quote copied from the book content.",
+            "source_chapter_num must refer to a chapter returned by the content index.",
+        ],
+    }
+
+
 def _print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -51,7 +63,7 @@ def _print_pretty_mapping(data: dict) -> None:
         print(f"{key}: {value}")
 
 
-def _read_payload(path: str) -> dict:
+def _read_json_payload(path: str) -> dict:
     raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
     try:
         payload = json.loads(raw)
@@ -59,10 +71,24 @@ def _read_payload(path: str) -> dict:
         raise SystemExit(f"Invalid JSON payload: {exc}") from exc
     if not isinstance(payload, dict):
         raise SystemExit("Payload must be a JSON object")
+    return payload
+
+
+def _read_payload(path: str) -> dict:
+    payload = _read_json_payload(path)
     if "skills" not in payload:
         raise SystemExit("Payload must include a top-level 'skills' field")
     try:
         AgentSkillIngestRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise SystemExit(str(exc)) from exc
+    return payload
+
+
+def _read_knowledge_units_payload(path: str) -> dict:
+    payload = _read_json_payload(path)
+    try:
+        AgentKnowledgeUnitIngestRequest.model_validate(payload)
     except ValidationError as exc:
         raise SystemExit(str(exc)) from exc
     return payload
@@ -93,10 +119,16 @@ def build_parser() -> argparse.ArgumentParser:
     content_parser.add_argument("--output", type=Path)
 
     subparsers.add_parser("schema")
+    subparsers.add_parser("knowledge-unit-schema")
 
     ingest_parser = subparsers.add_parser("ingest-skill")
     ingest_parser.add_argument("book_id")
     ingest_parser.add_argument("payload_json")
+
+    ku_parser = subparsers.add_parser("ingest-knowledge-units", help="Persist book-level knowledge units")
+    ku_parser.add_argument("book_id")
+    ku_parser.add_argument("payload", help="Path to KU JSON payload, or '-' for stdin")
+    ku_parser.add_argument("--format", choices=["pretty", "json"], default="pretty")
 
     return parser
 
@@ -107,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "schema":
         _print_json(agent_skill_schema_payload())
+        return 0
+
+    if args.command == "knowledge-unit-schema":
+        _print_json(knowledge_unit_schema_payload())
         return 0
 
     client = make_client()
@@ -164,6 +200,15 @@ def main(argv: list[str] | None = None) -> int:
                     "response": result,
                 }
             )
+            return 0
+
+        if args.command == "ingest-knowledge-units":
+            payload = _read_knowledge_units_payload(args.payload)
+            result = client.ingest_knowledge_units(args.book_id, payload)
+            if args.format == "json":
+                _print_json(result)
+            else:
+                _print_pretty_mapping(result)
             return 0
     finally:
         close = getattr(client, "close", None)

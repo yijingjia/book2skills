@@ -31,6 +31,10 @@ class FakeClient:
         self.calls.append(("ingest_skill", book_id, payload))
         return {"id": "pkg-1", "status": "ready", "scripts": {}, "skill_md": "# Router"}
 
+    def ingest_knowledge_units(self, book_id: str, payload: dict):
+        self.calls.append(("ingest_knowledge_units", book_id, payload))
+        return {"book_id": book_id, "knowledge_units_count": 1, "status": "ready"}
+
 
 def valid_skill_payload():
     return {
@@ -128,6 +132,16 @@ def test_schema_emits_agent_skill_ingest_schema(capsys):
     assert "skills" in payload["payload_schema"]["properties"]
 
 
+def test_knowledge_unit_schema_emits_ingest_schema(capsys):
+    exit_code = cli.main(["knowledge-unit-schema"])
+    captured = capsys.readouterr()
+
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert "payload_schema" in payload
+    assert "knowledge_units" in payload["payload_schema"]["properties"]
+
+
 def test_ingest_skill_rejects_invalid_json(tmp_path, monkeypatch, capsys):
     payload_path = tmp_path / "bad.json"
     payload_path.write_text("{bad", encoding="utf-8")
@@ -145,3 +159,46 @@ def test_ingest_skill_reads_stdin(monkeypatch, capsys):
 
     assert exit_code == 0
     assert fake.calls == [("ingest_skill", "book-1", payload)]
+
+
+def test_ingest_knowledge_units_reads_json_file(tmp_path, monkeypatch, capsys):
+    payload_path = tmp_path / "kus.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "knowledge_units": [
+                    {
+                        "source_chapter_num": 1,
+                        "source_quote": "原文",
+                        "principle": "原则",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code, captured, fake = run_cli(
+        ["ingest-knowledge-units", "book-1", str(payload_path)],
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert fake.calls == [
+        (
+            "ingest_knowledge_units",
+            "book-1",
+            {
+                "knowledge_units": [
+                    {
+                        "source_chapter_num": 1,
+                        "source_quote": "原文",
+                        "principle": "原则",
+                    }
+                ]
+            },
+        )
+    ]
+    assert "knowledge_units_count" in captured.out

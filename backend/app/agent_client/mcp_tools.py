@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from app.agent_client.cli import agent_skill_schema_payload
+from app.agent_client.cli import agent_skill_schema_payload, knowledge_unit_schema_payload
 from app.agent_client.client import Book2SkillsAgentClient
 
 
@@ -68,9 +68,21 @@ def get_agent_skill_schema_tool() -> dict:
     return agent_skill_schema_payload()
 
 
+def get_knowledge_unit_schema_tool() -> dict:
+    return knowledge_unit_schema_payload()
+
+
 def ingest_agent_skill_tool(
     client: Book2SkillsAgentClient,
     book_id: str,
     payload: dict,
 ) -> dict:
     return client.ingest_skill(book_id, payload)
+
+
+def ingest_knowledge_units_tool(
+    client: Book2SkillsAgentClient,
+    book_id: str,
+    payload: dict,
+) -> dict:
+    return client.ingest_knowledge_units(book_id, payload)

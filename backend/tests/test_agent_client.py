@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -92,6 +94,24 @@ def test_ingest_skill_posts_payload_unchanged():
     assert result["id"] == "pkg-1"
     assert seen["url"] == "http://localhost:8000/api/books/book-1/skills"
     assert b'"router_md":"# Router"' in seen["payload"]
+
+
+def test_ingest_knowledge_units_posts_payload_unchanged():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["payload"] = request.content
+        return httpx.Response(200, json={"knowledge_units_count": 1})
+
+    client = make_client(handler)
+    payload = {"knowledge_units": [{"source_chapter_num": 1, "source_quote": "原文", "principle": "原则"}]}
+
+    result = client.ingest_knowledge_units("book-1", payload)
+
+    assert result == {"knowledge_units_count": 1}
+    assert seen["url"] == "http://localhost:8000/api/books/book-1/knowledge-units"
+    assert json.loads(seen["payload"]) == payload
 
 
 def test_upload_book_posts_multipart_file(tmp_path):

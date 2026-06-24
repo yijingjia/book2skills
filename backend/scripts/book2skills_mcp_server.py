@@ -14,7 +14,9 @@ from app.agent_client.mcp_tools import (  # noqa: E402
     get_agent_skill_schema_tool,
     get_book_content_tool,
     get_book_tool,
+    get_knowledge_unit_schema_tool,
     ingest_agent_skill_tool,
+    ingest_knowledge_units_tool,
     list_books_tool,
     upload_book_tool,
     wait_book_ready_tool,
@@ -111,11 +113,27 @@ def book2skills_get_agent_skill_schema() -> dict:
 
 
 @mcp.tool()
+def book2skills_get_knowledge_unit_schema() -> dict:
+    """Return the structured payload schema for comprehensive book-level knowledge units."""
+    return get_knowledge_unit_schema_tool()
+
+
+@mcp.tool()
 def book2skills_ingest_agent_skill(book_id: str, payload: dict) -> dict:
     """Persist a fully generated structured agent skill payload into Book2Skills."""
     client = _client()
     try:
         return ingest_agent_skill_tool(client, book_id=book_id, payload=payload)
+    finally:
+        client.close()
+
+
+@mcp.tool()
+def book2skills_ingest_knowledge_units(book_id: str, payload: dict) -> dict:
+    """Persist comprehensive book-level knowledge units before ingesting a skill."""
+    client = _client()
+    try:
+        return ingest_knowledge_units_tool(client, book_id=book_id, payload=payload)
     finally:
         client.close()
 

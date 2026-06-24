@@ -11,9 +11,11 @@ The service does not run the agent. The agent reads parsed book content from Boo
 3. Wait until the book status is `ready`.
 4. Read parsed content with `content mode=index`.
 5. Read selected chapter bodies with `content mode=chapter`.
-6. Generate a structured payload matching `AgentSkillIngestRequest`.
-7. Ingest the payload.
-8. Open the existing UI and use the resulting ready skill package.
+6. Extract comprehensive book-level knowledge units.
+7. Ingest the knowledge units.
+8. Generate a structured payload matching `AgentSkillIngestRequest`.
+9. Ingest the skill payload.
+10. Open the existing UI and use the resulting ready skill package.
 
 ## CLI
 
@@ -50,6 +52,20 @@ Print the required ingest schema:
 ```bash
 cd backend
 uv run python scripts/book2skills_agent.py schema
+```
+
+Print the required knowledge-unit ingest schema:
+
+```bash
+cd backend
+uv run python scripts/book2skills_agent.py knowledge-unit-schema
+```
+
+Ingest comprehensive book-level knowledge units:
+
+```bash
+cd backend
+uv run python scripts/book2skills_agent.py ingest-knowledge-units <book_id> /tmp/book-kus.json
 ```
 
 Ingest an agent-generated skill:
@@ -95,7 +111,9 @@ Available tools:
 - `book2skills_get_book`
 - `book2skills_wait_book_ready`
 - `book2skills_get_book_content`
+- `book2skills_get_knowledge_unit_schema`
 - `book2skills_get_agent_skill_schema`
+- `book2skills_ingest_knowledge_units`
 - `book2skills_ingest_agent_skill`
 
 The MCP tools do not generate the skill. They expose parsed content and persist the final structured payload produced by the agent.
@@ -128,7 +146,7 @@ Use this flow from an MCP-capable agent such as Codex or Claude Desktop after th
    }
    ```
 
-   Use the returned chapter list to choose the chapters that matter most for the skill. Prefer reading targeted chapters first; use full-book mode only when the book is short enough for the agent context.
+   Use the returned chapter list to plan comprehensive KU extraction. Prefer reading all chapters; use selected chapters only when the intended skill deliberately targets a subset of the book.
 
 3. Read chapter bodies with `book2skills_get_book_content`.
 
@@ -142,13 +160,77 @@ Use this flow from an MCP-capable agent such as Codex or Claude Desktop after th
    }
    ```
 
-   Repeat for the chapters needed to build the skill. Every final thinking step should cite a `source_quote` copied from these chapter bodies.
+   Repeat for the chapters needed to extract a comprehensive set of book-level KUs. Every agent-submitted KU must cite a `source_quote` copied from these chapter bodies.
 
-4. Inspect the required payload schema with `book2skills_get_agent_skill_schema`.
+4. Inspect the required KU payload schema with `book2skills_get_knowledge_unit_schema`.
+
+   The schema is the contract for the next step. The agent should generate JSON matching the returned payload schema, not a hand-written schema copied from this document.
+
+5. Ask the agent to produce the KU payload in its own context.
+
+   Suggested prompt:
+
+   ```text
+   Use the Book2Skills MCP content already read from this book to extract comprehensive book-level knowledge units.
+
+   Requirements:
+   - Output JSON with generator_name and knowledge_units.
+   - Each knowledge unit must be atomic and reusable across future collection/KG workflows.
+   - Each knowledge unit must include source_chapter_num and a non-empty source_quote copied exactly from the book.
+   - Do not only extract KUs for the final skill steps. Cover the book's important principles, methods, examples, and when_to_use guidance.
+   - Do not invent citations. If source evidence is weak, read more chapters first.
+   ```
+
+   Example payload:
+
+   ```json
+   {
+     "generator_name": "codex",
+     "knowledge_units": [
+       {
+         "source_chapter_num": 1,
+         "source_quote": "系统由一组相互连接的要素构成。",
+         "principle": "分析系统时不能只看要素，还要看连接关系和目标。",
+         "method": "系统思维",
+         "step_by_step": ["识别要素", "识别连接关系", "识别系统目标"],
+         "example": "局部效率提升可能降低整体效率。",
+         "when_to_use": ["分析复杂问题", "判断局部优化是否有效"],
+         "tags": ["系统思维", "复杂问题"]
+       }
+     ]
+   }
+   ```
+
+6. Persist the KU payload with `book2skills_ingest_knowledge_units`.
+
+   Input:
+
+   ```json
+   {
+     "book_id": "<book_id>",
+     "payload": {
+       "generator_name": "codex",
+       "knowledge_units": [
+         {
+           "source_chapter_num": 1,
+           "source_quote": "...",
+           "principle": "...",
+           "method": "...",
+           "step_by_step": ["..."],
+           "example": "...",
+           "when_to_use": ["..."],
+           "tags": ["..."]
+         }
+       ]
+     }
+   }
+   ```
+
+7. Inspect the required skill payload schema with `book2skills_get_agent_skill_schema`.
 
    The schema is the contract for the next step. The agent should generate JSON matching `AgentSkillIngestRequest`, not free-form Markdown.
 
-5. Ask the agent to produce the skill payload in its own context.
+8. Ask the agent to produce the skill payload in its own context.
 
    Suggested prompt:
 
@@ -164,7 +246,7 @@ Use this flow from an MCP-capable agent such as Codex or Claude Desktop after th
    - Set metadata.generated_by to "agent" and metadata.agent_name to the current agent name.
    ```
 
-6. Persist the generated payload with `book2skills_ingest_agent_skill`.
+9. Persist the generated payload with `book2skills_ingest_agent_skill`.
 
    Input:
 
@@ -197,15 +279,16 @@ Use this flow from an MCP-capable agent such as Codex or Claude Desktop after th
    }
    ```
 
-7. Open the existing Book2Skills web UI.
+9. Open the existing Book2Skills web UI.
 
    The ingested skill package should appear as a ready skill for that book. It can be viewed, downloaded, and used through the same storage surfaces as skills generated by the built-in LLM pipeline.
 
 Important boundaries:
 
 - MCP does not make Book2Skills call an agent. The agent calls Book2Skills.
-- Book2Skills stores the final payload, creates `SkillPackage` and `Skill` rows, and indexes skill vectors.
+- Book2Skills stores book-level KUs before skill ingest, then stores the final skill payload, creates `SkillPackage` and `Skill` rows, and indexes skill vectors.
 - The agent is responsible for reading enough source content and producing faithful, cited skill JSON.
+- Agent skill ingest will fail until the book has knowledge units. Extract KUs comprehensively first; do not only extract KUs for the few steps used in the skill.
 
 ## Payload Example
 
@@ -241,6 +324,7 @@ Every `thinking_steps[]` item must include a non-empty `source_quote` copied fro
 
 Agent-ingested skills are first-class Book2Skills skills:
 
+- `book_knowledge_units` stores the authoritative book-level KU set.
 - `skill_packages` stores the final `skill_md`, scripts, templates, and provenance.
 - `skills` stores one row per modular skill.
 - `skills_vectors` stores one vector per modular skill.
